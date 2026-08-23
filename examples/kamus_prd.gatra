@@ -1,0 +1,46 @@
+// kamus_prd.gatra — Contoh fitur baru hasil penyelarasan ke Kamus PRD (bagian 7)
+
+// tipe — alias tipe
+tipe UserId = angka
+
+// larik<T> — setara dengan T[]
+isi skor: larik<angka> = [90, 80, 70]
+
+// peta<K, V> — direpresentasikan sebagai objek JS biasa
+isi nilai: peta<teks, angka> = { budi: 90, siti: 95 }
+
+// ekspor — tanda fungsi bisa dipakai modul lain
+ekspor fungsi ambilSkorSiti(id: UserId): angka {
+  balik nilai.siti
+}
+
+cetak(skor)
+cetak(ambilSkorSiti(1))
+
+// buat — awalan opsional sebelum inisialisasi struktur
+struktur Titik {
+  x: angka
+  y: angka
+}
+
+isi titik = buat Titik { x: 3, y: 4 }
+cetak(titik)
+
+// berhenti / lanjut — kontrol loop
+isi ubah total: angka = 0
+untuk i dalam 0..10 {
+  jika (i == 5) { berhenti }
+  jika (i == 2) { lanjut }
+  total = total + i
+}
+cetak("total:")
+cetak(total)
+
+// cocok / kasus / lain — pencocokan nilai
+isi hari: angka = 3
+cocok hari {
+  kasus 1 -> cetak("Senin")
+  kasus 2 -> cetak("Selasa")
+  kasus 3 -> cetak("Rabu")
+  lain -> cetak("Hari lain")
+}

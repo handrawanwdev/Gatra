@@ -1,0 +1,13 @@
+{
+  "name": "gatra",
+  "version": "0.1.0",
+  "description": "Gatra — bahasa pemrograman statis yang dikompilasi ke JavaScript",
+  "main": "src/cli/gatra.js",
+  "bin": {
+    "gatra": "./src/cli/gatra.js"
+  },
+  "scripts": {
+    "test": "node tests/test.js"
+  },
+  "license": "MIT"
+}

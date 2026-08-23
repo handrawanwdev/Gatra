@@ -1,0 +1,16 @@
+// Halo Dunia — mode Bahasa Indonesia
+
+isi nama: teks = "Gatra"
+isi versi: angka = 1
+
+cetak("Halo, Dunia!")
+cetak("Nama bahasa: ", nama)
+cetak("Versi: ", versi)
+
+jika (versi == 9) {
+    cetak("ANgka 9")
+} lain jika (versi == 8 ){
+     cetak("ANgka 8")
+} lain {
+     cetak("ANgka 1")
+}

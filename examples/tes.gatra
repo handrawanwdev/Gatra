@@ -1,0 +1,9 @@
+impor crypto dari "crypto"
+
+fungsi hash(nilai: teks): teks {
+    balik crypto
+        .createHash("sha256")
+        .update(nilai)
+        .digest("hex")
+}
+cetak(hash("wawan"))

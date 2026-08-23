@@ -1,0 +1,40 @@
+// 07_struktur.gatra — Struktur: deklarasi, inisialisasi, akses field, nested, 'buat'
+
+struktur Titik {
+  x: angka
+  y: angka
+}
+
+// Inisialisasi biasa
+isi p1 = Titik { x: 3, y: 4 }
+cetak(p1)
+cetak(p1.x)
+cetak(p1.y)
+
+// 'buat' adalah awalan opsional sebelum inisialisasi struktur (mirip 'new')
+isi p2 = buat Titik { x: 0, y: 0 }
+cetak(p2)
+
+// Struktur bersarang — komposisi, bukan pewarisan (Gatra tidak punya class)
+struktur Alamat {
+  kota: teks
+  kodePos: angka
+}
+
+struktur Pengguna {
+  nama: teks
+  alamat: Alamat
+}
+
+isi user = Pengguna {
+  nama: "Handrawan",
+  alamat: Alamat { kota: "Jakarta", kodePos: 12345 }
+}
+cetak(user.nama)
+cetak(user.alamat.kota)
+
+// Struktur sebagai parameter dan nilai kembali fungsi
+fungsi jarakKuadrat(p: Titik): angka {
+  balik p.x * p.x + p.y * p.y
+}
+cetak(jarakKuadrat(p1))

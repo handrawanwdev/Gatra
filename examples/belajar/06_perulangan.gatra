@@ -1,0 +1,36 @@
+// 06_perulangan.gatra — untuk (range & for-of), selama, berhenti, lanjut
+
+// 'untuk' dengan rentang: awal..akhir (akhir eksklusif)
+untuk i dalam 0..5 {
+  cetak(i)
+}
+
+// 'untuk' dengan iterasi larik (for-of)
+isi buah: teks[] = ["apel", "jeruk", "mangga"]
+untuk item dalam buah {
+  cetak(item)
+}
+
+// 'selama' — perulangan dengan kondisi
+isi ubah n: angka = 0
+selama (n < 3) {
+  cetak("selama:")
+  cetak(n)
+  n = n + 1
+}
+
+// 'berhenti' — keluar dari perulangan lebih awal
+untuk i dalam 0..10 {
+  jika (i == 4) {
+    berhenti
+  }
+  cetak(i)
+}
+
+// 'lanjut' — lompat ke iterasi berikutnya
+untuk i dalam 0..5 {
+  jika (i == 2) {
+    lanjut
+  }
+  cetak(i)
+}

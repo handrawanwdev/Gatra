@@ -1,0 +1,21 @@
+// 11_fungsi_lanjutan.gatra — Fungsi anonim, disimpan di variabel, dan sebagai argumen
+
+// Fungsi anonim disimpan ke variabel
+isi kali = fungsi(a: angka, b: angka): angka {
+  balik a * b
+}
+cetak(kali(3, 4))
+
+// Fungsi anonim langsung dipakai sebagai argumen
+fungsi terapkan(a: angka, b: angka, operasi: apapun): angka {
+  balik operasi(a, b)
+}
+cetak(terapkan(10, 5, fungsi(a: angka, b: angka): angka { balik a + b }))
+cetak(terapkan(10, 5, fungsi(a: angka, b: angka): angka { balik a - b }))
+
+// Fungsi dengan argumen jumlah variabel via spread
+fungsi jumlahkan(a: angka, b: angka): angka {
+  balik a + b
+}
+isi args: angka[] = [7, 8]
+cetak(jumlahkan(...args))

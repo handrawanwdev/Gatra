@@ -1,0 +1,34 @@
+// 08_larik_dan_peta.gatra — Larik (array) dan Peta (map)
+
+// Larik dengan sintaks kurung siku T[]
+isi nilai: angka[] = [95, 82, 76, 88, 91]
+cetak(nilai)
+
+// Larik dengan sintaks generik larik<T> — setara persis dengan T[]
+isi nama: larik<teks> = ["Ana", "Budi", "Citra"]
+cetak(nama)
+
+// Larik bersarang (matriks)
+isi matriks: angka[][] = [[1, 2, 3], [4, 5, 6]]
+cetak(matriks)
+
+// Larik kosong lalu diisi via fungsi
+fungsi buatRentang(a: angka, b: angka, c: angka): angka[] {
+  balik [a, b, c]
+}
+cetak(buatRentang(10, 20, 30))
+
+// Iterasi larik (lihat juga 06_perulangan.gatra)
+untuk n dalam nilai {
+  cetak(n)
+}
+
+// Peta<K, V> — direpresentasikan sebagai objek JavaScript biasa
+isi skor: peta<teks, angka> = { budi: 90, siti: 95, ana: 88 }
+cetak(skor)
+cetak(skor.budi)
+cetak(skor.siti)
+
+// Peta tanpa anotasi tipe eksplisit (inferensi via literal objek)
+isi konfigurasi = { host: "localhost", port: 8080, aktif: benar }
+cetak(konfigurasi)

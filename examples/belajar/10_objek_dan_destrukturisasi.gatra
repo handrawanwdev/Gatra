@@ -1,0 +1,34 @@
+// 10_objek_dan_destrukturisasi.gatra — Literal objek, spread, destrukturisasi
+
+// Literal objek anonim
+isi titik = { x: 1, y: 2 }
+cetak(titik)
+
+// Objek kosong
+isi kosongan = {}
+cetak(kosongan)
+
+// Spread — menyalin field dari objek/larik lain
+isi dasar = { host: "localhost", port: 8080 }
+isi override = { ...dasar, port: 9090 }
+cetak(override)
+
+isi angka1: angka[] = [1, 2, 3]
+isi gabungan = [...angka1, 4, 5]
+cetak(gabungan)
+
+// Destrukturisasi objek
+isi pengguna = { id: 1, nama: "Ana", aktif: benar }
+isi { id, nama } = pengguna
+cetak(id)
+cetak(nama)
+
+// Destrukturisasi objek dengan penamaan ulang (rename)
+isi { nama: namaPengguna } = pengguna
+cetak(namaPengguna)
+
+// Destrukturisasi larik
+isi pasangan: angka[] = [100, 200]
+isi [pertama, kedua] = pasangan
+cetak(pertama)
+cetak(kedua)

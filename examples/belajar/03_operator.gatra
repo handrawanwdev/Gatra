@@ -1,0 +1,38 @@
+// 03_operator.gatra — Operator aritmatika, perbandingan, logika, dan ternary
+
+isi a = 10
+isi b = 3
+
+// Aritmatika: + - * /
+cetak(a + b)
+cetak(a - b)
+cetak(a * b)
+cetak(a / b)
+
+// Perbandingan: > < >= <= == !=
+cetak(a > b)
+cetak(a < b)
+cetak(a >= 10)
+cetak(a <= 9)
+cetak(a == 10)
+cetak(a != b)
+
+// Logika: && || !
+isi x = benar
+isi y = salah
+cetak(x && y)
+cetak(x || y)
+cetak(!x)
+
+// Unary minus
+isi negatif = -a
+cetak(negatif)
+
+// Ternary gaya Python: nilai jika kondisi lain alternatif
+isi umur = 20
+isi status = "dewasa" jika umur >= 18 lain "anak"
+cetak(status)
+
+// String concatenation dengan '+'
+isi salam = "Halo, " + "Dunia!"
+cetak(salam)

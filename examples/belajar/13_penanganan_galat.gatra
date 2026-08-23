@@ -1,0 +1,32 @@
+// 13_penanganan_galat.gatra — coba/tangkap/akhirnya
+
+fungsi bagi(a: angka, b: angka): angka {
+  jika (b == 0) {
+    balik 0
+  }
+  balik a / b
+}
+
+coba {
+  cetak(bagi(10, 2))
+  cetak("blok coba selesai tanpa galat")
+} tangkap (e) {
+  cetak("terjadi galat:")
+  cetak(e)
+}
+
+// 'akhirnya' selalu dijalankan, galat atau tidak
+coba {
+  cetak("mencoba sesuatu")
+} tangkap (e) {
+  cetak("galat ditangkap")
+} akhirnya {
+  cetak("selesai, apapun hasilnya")
+}
+
+// 'coba' boleh dipakai hanya dengan 'akhirnya' saja (tanpa 'tangkap')
+coba {
+  cetak("blok tanpa tangkap")
+} akhirnya {
+  cetak("akhirnya tetap jalan")
+}

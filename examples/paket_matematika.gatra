@@ -1,0 +1,20 @@
+// paket_matematika.gatra — Contoh file paket (mode Indonesia)
+// Dikompilasi sebagai ES Module dengan fungsi ter-export
+
+paket matematika
+
+fungsi tambah(a: angka, b: angka): angka {
+  balik a + b
+}
+
+fungsi kurang(a: angka, b: angka): angka {
+  balik a - b
+}
+
+fungsi kali(a: angka, b: angka): angka {
+  balik a * b
+}
+
+fungsi kuadrat(n: angka): angka {
+  balik n * n
+}

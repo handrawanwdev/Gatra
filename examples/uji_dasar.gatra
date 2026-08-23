@@ -1,0 +1,13 @@
+// uji_dasar.gatra — Contoh 'uji' dan 'pastikan' (PRD bagian 31)
+
+fungsi tambah(a: angka, b: angka): angka {
+  balik a + b
+}
+
+uji "penjumlahan dasar" {
+  pastikan tambah(2, 3) == 5
+}
+
+uji "penjumlahan negatif" {
+  pastikan tambah(-2, -3) == -5
+}

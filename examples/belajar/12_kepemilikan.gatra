@@ -1,0 +1,43 @@
+// 12_kepemilikan.gatra — Ownership ala Rust yang disederhanakan
+
+struktur Config {
+  timeout: angka
+}
+
+// Tipe primitif (angka/teks/logika) memakai copy semantics — aman dipakai ulang.
+isi a = 42
+isi b = a
+cetak("a masih valid:")
+cetak(a)
+cetak("b:")
+cetak(b)
+
+// Nilai struct/larik berpindah kepemilikan (move) saat di-assign ke variabel lain.
+isi asli = Config { timeout: 30 }
+isi pindah = asli
+// cetak(asli.timeout)   // akan GALAT: 'asli' sudah dipindahkan ke 'pindah'
+cetak(pindah.timeout)
+
+// Mengirim struct ke fungsi juga memindahkan kepemilikan.
+fungsi ambilTimeout(c: Config): angka {
+  balik c.timeout
+}
+isi pkt = Config { timeout: 60 }
+cetak(ambilTimeout(pkt))
+// cetak(pkt.timeout)    // akan GALAT: 'pkt' sudah dipindahkan ke fungsi
+
+// Peminjaman tidak dapat diubah (&) — boleh banyak pinjaman baca sekaligus.
+isi nilai = 100
+isi r1 = &nilai
+isi r2 = &nilai
+cetak(*r1)
+cetak(*r2)
+cetak("nilai masih valid:")
+cetak(nilai)
+
+// Peminjaman dapat diubah (&ubah) — hanya boleh satu aktif, tulis lewat *ref.
+isi ubah skor = 0
+isi ref = &ubah skor
+*ref = 500
+cetak("skor setelah dipinjam-ubah:")
+cetak(skor)

@@ -1,0 +1,22 @@
+// Contoh struktur — mode Bahasa Indonesia
+
+struktur Kordinat {
+  lat: angka
+  long: angka
+}
+
+struktur Titik {
+  x: angka
+  y: angka
+  kordinat: Kordinat
+}
+
+fungsi jarakKuadrat(p: Titik): angka {
+  balik p.x * p.x + p.y * p.y
+}
+
+isi asal = Titik { x: 0, y: 0, kordinat: Kordinat { lat: 23, long: 123} }
+isi p = Titik { x: 3, y: 4, kordinat: Kordinat { lat: 23, long: 123} }
+
+cetak("Jarak kuadrat:", jarakKuadrat(p))
+cetak(asal.kordinat)

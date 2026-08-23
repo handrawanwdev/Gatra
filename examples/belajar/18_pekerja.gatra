@@ -1,0 +1,34 @@
+// 18_pekerja.gatra — 'pekerja'/'jalankan': OS thread sungguhan (Node worker_threads)
+//
+// PENTING: fungsi 'pekerja' dijalankan di thread terpisah — hanya boleh
+// memakai parameter dan hal-hal global (Math, dst), TIDAK boleh menutup
+// (closure) variabel Gatra dari luar, karena fungsinya diserialisasi ke
+// thread baru dan tidak berbagi memori dengan thread utama.
+
+pekerja fungsi hitungKuadrat(n: angka): angka {
+  balik n * n
+}
+
+fungsi asinkron utama(): tiada {
+  isi hasil = tunggu jalankan hitungKuadrat(21)
+  cetak("hasil dari pekerja:")
+  cetak(hasil)
+}
+utama()
+
+// Menjalankan beberapa pekerja sekaligus secara paralel
+pekerja fungsi hitungBerat(n: angka): angka {
+  isi ubah total: angka = 0
+  untuk i dalam 0..n {
+    total = total + i
+  }
+  balik total
+}
+
+fungsi asinkron paralel(): tiada {
+  isi a = tunggu jalankan hitungBerat(100)
+  isi b = tunggu jalankan hitungBerat(200)
+  cetak("jumlah dua hasil pekerja:")
+  cetak(a + b)
+}
+paralel()

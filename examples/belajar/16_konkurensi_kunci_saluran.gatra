@@ -1,0 +1,45 @@
+// 16_konkurensi_kunci_saluran.gatra — 'kunci' (mutex) dan 'saluran' (channel)
+//
+// Keduanya adalah primitif konkurensi tingkat-tugas-asinkron (berbasis Promise),
+// bukan thread OS sungguhan — itu tugas 'pekerja' (lihat 18_pekerja.gatra).
+
+// kunci() — melindungi data yang dipakai bersama antar tugas asinkron
+isi kunci = kunci()
+isi ubah total: angka = 0
+
+fungsi asinkron tambahkan(nilai: angka): tiada {
+  tunggu kunci.kunci()
+  total = total + nilai
+  kunci.buka()
+}
+
+fungsi asinkron demoKunci(): tiada {
+  tunggu tambahkan(10)
+  tunggu tambahkan(20)
+  tunggu tambahkan(30)
+  cetak("total setelah dikunci:")
+  cetak(total)
+}
+demoKunci()
+
+// saluran() — memindahkan data antar tugas tanpa berbagi mutable state langsung
+isi saluran = saluran()
+
+fungsi asinkron produsen(): tiada {
+  saluran.kirim(1)
+  saluran.kirim(2)
+  saluran.kirim(3)
+}
+
+fungsi asinkron konsumen(): tiada {
+  isi a = tunggu saluran.terima()
+  isi b = tunggu saluran.terima()
+  isi c = tunggu saluran.terima()
+  cetak("diterima dari saluran:")
+  cetak(a)
+  cetak(b)
+  cetak(c)
+}
+
+produsen()
+konsumen()

@@ -1,0 +1,19 @@
+// 09_teks_interpolasi.gatra — f-string: interpolasi teks
+
+isi nama = "Handrawan"
+isi umur = 25
+
+// f"..." — ekspresi di dalam { } disisipkan ke teks
+isi pesan = f"Nama saya {nama}, umur {umur} tahun"
+cetak(pesan)
+
+// Ekspresi apapun boleh di dalam { }, termasuk pemanggilan fungsi
+fungsi kuadrat(n: angka): angka {
+  balik n * n
+}
+cetak(f"Kuadrat dari 5 adalah {kuadrat(5)}")
+
+// Beberapa interpolasi sekaligus
+isi a = 10
+isi b = 20
+cetak(f"{a} + {b} = {a + b}")

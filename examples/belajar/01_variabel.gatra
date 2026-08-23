@@ -1,0 +1,24 @@
+// 01_variabel.gatra — Variabel: isi, ubah, dan inferensi tipe
+
+// 'isi' mendeklarasikan variabel. Tipe boleh eksplisit atau diinferensi.
+isi nama: teks = "Handrawan"
+isi umur: angka = 25
+isi aktif: logika = benar
+
+// Tanpa anotasi tipe — compiler menginferensi dari nilainya.
+isi kota = "Jakarta"     // teks
+isi tinggi = 172         // angka
+
+cetak(nama)
+cetak(umur)
+cetak(aktif)
+cetak(kota)
+cetak(tinggi)
+
+// Variabel biasa ('isi' tanpa 'ubah') tidak boleh ditimpa ulang.
+// Untuk variabel yang nilainya bisa berubah, pakai 'isi ubah'.
+isi ubah penghitung: angka = 0
+penghitung = penghitung + 1
+penghitung = penghitung + 1
+cetak("penghitung:")
+cetak(penghitung)

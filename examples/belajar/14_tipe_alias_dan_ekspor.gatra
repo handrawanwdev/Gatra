@@ -1,0 +1,29 @@
+// 14_tipe_alias_dan_ekspor.gatra — 'tipe' (alias tipe) dan 'ekspor'
+
+// 'tipe' membuat nama baru untuk tipe yang sudah ada
+tipe UserId = angka
+tipe Nama = teks
+
+fungsi ambilPengguna(id: UserId): Nama {
+  balik "Pengguna-" + f"{id}"
+}
+cetak(ambilPengguna(7))
+
+// 'ekspor' menandai fungsi supaya bisa dipakai modul lain
+// (lihat examples/paket_matematika.gatra + paket_utama.gatra untuk contoh impor penuh)
+ekspor fungsi tambahDua(n: angka): angka {
+  balik n + 2
+}
+cetak(tambahDua(40))
+
+// tipe alias untuk tipe opsional
+tipe Mungkin = teks?
+
+fungsi cari(ketemu: logika): Mungkin {
+  jika (ketemu) {
+    balik "ditemukan"
+  }
+  balik kosong
+}
+cetak(cari(benar))
+cetak(cari(salah))

@@ -1,0 +1,48 @@
+// 02_tipe_data.gatra — Sistem tipe: dasar, opsional, dan apapun
+
+// Tipe dasar
+isi t1: teks = "halo"
+isi t2: angka = 42
+isi t3: bilangan = 10      // alias 'angka' (integer secara konsep)
+isi t4: pecahan = 3.14     // alias 'angka' (float secara konsep)
+isi t5: logika = benar
+isi t6: byte = 255         // alias 'angka'
+
+cetak(t1)
+cetak(t2)
+cetak(t3)
+cetak(t4)
+cetak(t5)
+cetak(t6)
+
+// 'apapun' — escape hatch tanpa pemeriksaan tipe (dipakai untuk data dari luar)
+isi bebas: apapun = "boleh apa saja"
+cetak(bebas)
+
+// Opsional (T?) — cara aman merepresentasikan "mungkin tidak ada nilai".
+// Hanya tipe opsional yang boleh diisi 'kosong'.
+fungsi cariKota(id: angka): teks? {
+  jika (id == 1) {
+    balik "Jakarta"
+  }
+  balik kosong
+}
+
+isi hasil = cariKota(1)
+jika (hasil != kosong) {
+  cetak("Ditemukan:")
+  cetak(hasil)
+} lain {
+  cetak("Tidak ditemukan")
+}
+
+isi kosongkan = cariKota(99)
+jika (kosongkan == kosong) {
+  cetak("Sesuai dugaan: kosong")
+}
+
+// tiada — tipe kembalian fungsi yang tidak mengembalikan apa-apa
+fungsi catat(pesan: teks): tiada {
+  cetak(pesan)
+}
+catat("dicatat")

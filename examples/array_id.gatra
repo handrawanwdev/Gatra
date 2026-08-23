@@ -1,0 +1,46 @@
+// array_id.gatra — Sistem tipe array (mode Indonesia)
+
+// Array angka
+isi nilai: angka[] = [95, 82, 76, 88, 91]
+cetak(nilai)
+
+// Array teks
+isi bahasa: teks[] = ["Gatra", "Go", "Rust", "TypeScript"]
+cetak(bahasa)
+
+// Array logika
+isi tanda: logika[] = [benar, salah, benar, benar]
+cetak(tanda)
+
+// Array bersarang (matriks)
+isi matriks: angka[][] = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+cetak(matriks)
+
+// Array struct
+struktur Titik {
+  x: angka
+  y: angka
+}
+
+isi titik_list: Titik[] = [
+  Titik { x: 0, y: 0 },
+  Titik { x: 3, y: 4 },
+  Titik { x: 6, y: 8 }
+]
+cetak(titik_list)
+
+// Fungsi mengembalikan array
+fungsi buat_rentang(a: angka, b: angka, c: angka): angka[] {
+  balik [a, b, c]
+}
+
+isi nums = buat_rentang(10, 20, 30)
+cetak(nums)
+
+// Fungsi menerima dan mengembalikan array
+fungsi identitas(data: angka[]): angka[] {
+  balik data
+}
+
+isi hasil = identitas([100, 200, 300])
+cetak(hasil)

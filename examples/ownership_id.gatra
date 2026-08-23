@@ -1,0 +1,77 @@
+// Contoh kepemilikan (ownership) — mode Bahasa Indonesia
+//
+// Gatra menerapkan ownership sederhana ala Rust:
+//   - Nilai struct dipindahkan saat di-assign atau dikirim ke fungsi
+//   - Tipe primitif (angka, teks, logika) menggunakan copy semantics
+//   - Pinjam dengan & (tidak dapat diubah) atau &ubah (dapat diubah)
+//   - Perubahan nilai memerlukan 'isi ubah'
+
+struktur Config {
+  timeout: angka
+  percobaan: angka
+}
+
+fungsi ambilTimeout(c: Config): angka {
+  balik c.timeout
+}
+
+// ── Move semantics ────────────────────────────────────────────────────────────
+// Assign struct memindahkan kepemilikan ke variabel baru.
+
+isi asli = Config { timeout: 30, percobaan: 3 }
+isi pindah = asli              // kepemilikan 'asli' pindah ke 'pindah'
+// cetak(asli.timeout)        // KESALAHAN: asli sudah dipindahkan
+
+cetak("timeout:")
+cetak(pindah.timeout)          // 30
+
+// Mengirim struct ke fungsi juga memindahkan kepemilikan.
+isi pkt = Config { timeout: 60, percobaan: 5 }
+isi t = ambilTimeout(pkt)      // pkt dipindahkan ke fungsi
+// cetak(pkt.percobaan)        // KESALAHAN: pkt sudah dipindahkan
+
+cetak("timeout kembali:")
+cetak(t)                       // 60
+
+// ── Tipe primitif menggunakan copy semantics ──────────────────────────────────
+// angka / teks / logika di-copy, bukan dipindahkan.
+
+isi a = 42
+isi b = a                      // a di-copy, tidak dipindahkan
+cetak("a masih valid:")
+cetak(a)                       // 42
+cetak("b:")
+cetak(b)                       // 42
+
+// ── Perubahan nilai butuh 'isi ubah' ─────────────────────────────────────────
+
+isi ubah penghitung = 0
+penghitung = penghitung + 1
+penghitung = penghitung + 1
+penghitung = penghitung + 1
+cetak("penghitung:")
+cetak(penghitung)              // 3
+
+// ── Pinjaman tidak dapat diubah (&) ──────────────────────────────────────────
+// Banyak pinjaman & boleh aktif bersamaan.
+// Variabel asli tetap valid selama dipinjam.
+
+isi x = 100
+isi r1 = &x
+isi r2 = &x                    // beberapa & dibolehkan
+cetak("r1:")
+cetak(*r1)                     // 100
+cetak("r2:")
+cetak(*r2)                     // 100
+cetak("x masih valid:")
+cetak(x)                       // 100
+
+// ── Pinjaman dapat diubah (&ubah) ────────────────────────────────────────────
+// Hanya satu &ubah yang boleh aktif.
+// Gunakan *ref untuk menulis melalui pinjaman.
+
+isi ubah skor = 0
+isi ref = &ubah skor
+*ref = 500
+cetak("skor setelah pinjaman ubah:")
+cetak(skor)                    // 500

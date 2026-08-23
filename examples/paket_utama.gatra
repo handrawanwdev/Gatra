@@ -1,0 +1,19 @@
+// paket_utama.gatra — File utama yang mengimpor paket (mode Indonesia)
+
+impor mat dari "./paket_matematika.gatra"
+
+fungsi mulai(): tiada {
+  isi jumlah = mat.tambah(10, 5)
+  cetak(jumlah)
+
+  isi selisih = mat.kurang(20, 8)
+  cetak(selisih)
+
+  isi hasil_kali = mat.kali(4, 6)
+  cetak(hasil_kali)
+
+  isi kuadrat = mat.kuadrat(7)
+  cetak(kuadrat)
+}
+
+mulai()

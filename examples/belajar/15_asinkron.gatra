@@ -1,0 +1,21 @@
+// 15_asinkron.gatra — asinkron/tunggu (async/await)
+
+fungsi asinkron ambilData(): angka {
+  balik 42
+}
+
+fungsi asinkron utama(): tiada {
+  isi hasil = tunggu ambilData()
+  cetak("hasil:")
+  cetak(hasil)
+}
+
+utama()
+
+// Beberapa 'tunggu' berurutan di dalam satu fungsi asinkron
+fungsi asinkron langkahDemiLangkah(): tiada {
+  isi a = tunggu ambilData()
+  isi b = tunggu ambilData()
+  cetak(a + b)
+}
+langkahDemiLangkah()

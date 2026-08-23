@@ -1,0 +1,38 @@
+// 04_fungsi.gatra — Fungsi: parameter, tipe kembalian, default, dan balik/keluar
+
+fungsi tambah(a: angka, b: angka): angka {
+  balik a + b
+}
+cetak(tambah(2, 3))
+
+// Parameter dengan nilai default
+fungsi sapa(nama: teks = "Dunia"): teks {
+  balik "Halo, " + nama
+}
+cetak(sapa())
+cetak(sapa("Handrawan"))
+
+// 'keluar' adalah alias 'balik' untuk early return
+fungsi absolut(n: angka): angka {
+  jika (n < 0) {
+    keluar -n
+  }
+  balik n
+}
+cetak(absolut(-7))
+cetak(absolut(7))
+
+// Fungsi rekursif
+fungsi faktorial(n: angka): angka {
+  jika (n <= 1) {
+    balik 1
+  }
+  balik n * faktorial(n - 1)
+}
+cetak(faktorial(5))
+
+// Fungsi tanpa nilai kembali eksplisit (void / 'tiada')
+fungsi cetakGaris(): tiada {
+  cetak("----------")
+}
+cetakGaris()

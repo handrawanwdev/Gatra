@@ -1,0 +1,12 @@
+// Fibonacci — English mode
+
+fungsi fibonacci(n: angka): angka {
+  jika n <= 1 {
+    balik n
+  }
+  balik fibonacci(n - 1) + fibonacci(n - 2)
+}
+
+isi result = fibonacci(10)
+cetak("fibonacci(10) =")
+cetak(result)

@@ -1,0 +1,37 @@
+// 19_pengujian.gatra — uji/pastikan (pengujian bawaan bahasa)
+//
+// Jalankan dengan: gatra uji examples/belajar/19_pengujian.gatra
+// (blok 'uji' TIDAK ikut jalan lewat 'gatra jalankan' biasa)
+
+fungsi tambah(a: angka, b: angka): angka {
+  balik a + b
+}
+
+fungsi faktorial(n: angka): angka {
+  jika (n <= 1) {
+    balik 1
+  }
+  balik n * faktorial(n - 1)
+}
+
+uji "penjumlahan dasar" {
+  pastikan tambah(2, 3) == 5
+}
+
+uji "penjumlahan dengan nol" {
+  pastikan tambah(5, 0) == 5
+}
+
+uji "faktorial dari 5 adalah 120" {
+  pastikan faktorial(5) == 120
+}
+
+// Bisa memakai 'tunggu' langsung di dalam 'uji' tanpa perlu 'asinkron'
+fungsi asinkron ambilAngka(): angka {
+  balik 10
+}
+
+uji "tunggu di dalam uji" {
+  isi hasil = tunggu ambilAngka()
+  pastikan hasil == 10
+}
