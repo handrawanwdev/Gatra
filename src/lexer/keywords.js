@@ -26,7 +26,6 @@ const KEYWORD_MAP = {
   'tangkap':  'catch',    // catch block
   'akhirnya': 'finally',  // finally block
   'kosong':   'null',     // null literal
-  'ekspor':   'export',   // export modifier before 'fungsi'
   'kasus':    'case',     // arm inside 'pilih'
   'berhenti': 'break',    // break out of loop
   'lanjut':   'continue', // continue to next iteration
@@ -40,6 +39,22 @@ const KEYWORD_MAP = {
   'dengan':   'with',     // dengan expr { field ... } — transformasi objek
   'cocok':    'match',    // cocok expr { berhasil(n) => ... gagal(e) => ... } — pattern match hasil<T,E>
   'ukur':     'measure',  // ukur "label" { ... } — cetak durasi eksekusi blok (observability)
+  'kelas':    'class',
+  'konstruk': 'constructor',
+  'ini':      'this',
+  'induk':    'super',
+  'warisi':   'extends',   // kelas Kucing warisi Hewan { ... }
+  'statis':   'static',
+  'privat':   'private',
+  // 'ambil' (getter) dan 'atur' (setter) SENGAJA tidak masuk di sini — kata
+  // umum yang lumrah dipakai sebagai nama fungsi/variabel biasa (mis. fungsi
+  // 'ambil'). Dikenali kontekstual di parser lewat lookahead 2 IDENTIFIER
+  // berturut-turut di dalam badan 'kelas' (lihat classDecl() di parser.js).
+  //
+  // 'ekspor' TIDAK ADA LAGI — visibility sekarang murni dari huruf awal nama
+  // identifier (gaya Go): huruf besar = publik/terekspor, huruf kecil =
+  // internal. Tidak ada keyword export/public/private khusus. Lihat
+  // src/module/visibility.js dan checkPackageImport() di typechecker.js.
 };
 
 // Maps type keyword → canonical internal type

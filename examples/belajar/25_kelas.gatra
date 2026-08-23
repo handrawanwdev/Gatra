@@ -1,0 +1,67 @@
+// 25_kelas.gatra — 'kelas' — class, constructor, warisi (inheritance),
+// privat field, ambil/atur (getter/setter), statis, dan buat ClassName(...)
+//
+// Dikompilasi ke class JS asli. 'privat' memakai #field JS asli (benar-benar
+// tidak bisa diakses dari luar kelas), bukan sekadar konvensi penamaan.
+
+kelas Hewan {
+  privat nama: teks = ""
+
+  konstruk(nama: teks) {
+    ini.nama = nama
+  }
+
+  ambil nama(): teks {
+    balik ini.nama
+  }
+
+  sapa(): tiada {
+    cetak(ini.nama + " bersuara.")
+  }
+}
+
+kelas Kucing warisi Hewan {
+  konstruk(nama: teks) {
+    induk.konstruk(nama)
+  }
+
+  sapa(): tiada {
+    induk.sapa()
+    cetak(ini.nama + " mengeong.")
+  }
+}
+
+kelas Akun {
+  privat saldo: angka = 0
+
+  konstruk(saldoAwal: angka) {
+    ini.saldo = saldoAwal
+  }
+
+  ambil saldo(): angka {
+    balik ini.saldo
+  }
+
+  atur saldo(nilai: angka) {
+    ini.saldo = nilai
+  }
+
+  statis buatKosong(): Akun {
+    balik Akun(0)
+  }
+}
+
+fungsi utama(): tiada {
+  isi kucing = Kucing("Milo")
+  kucing.sapa()
+
+  isi akun = buat Akun(100)
+  cetak(akun.saldo)
+  akun.saldo = 250
+  cetak(akun.saldo)
+
+  isi akunBaru = Akun.buatKosong()
+  cetak(akunBaru.saldo)
+}
+
+utama()

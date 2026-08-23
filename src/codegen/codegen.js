@@ -1,6 +1,7 @@
 'use strict';
 
 const { NodeType: N } = require('../ast/nodes');
+const { isPublicName } = require('../module/visibility');
 
 // tunggu expr batas N detik — Promise.race antara expr dan timer yang me-reject.
 const BATAS_PRELUDE = `function __gatra_batas(ms) {
@@ -39,11 +40,19 @@ class CodeGenerator {
   constructor(opts = {}) {
     this.depth        = 0;
     this.isPackage     = false; // true when a PackageDeclaration is present
+    // Forces export emission even without 'paket' — set by callers compiling
+    // a file specifically because another file imports from it (runEsm's
+    // dependency pass, bundel, bangun-proyek). A plain entry-point compile
+    // (gatra jalankan/uji on the file the user actually runs) leaves this
+    // false so ordinary scripts don't grow stray 'export' and keep using the
+    // fast vm.Script sandbox path instead of spawning a real Node subprocess.
+    this.emitExports  = !!opts.emitExports;
     this.matchCounter  = 0;
     this.measureCounter = 0;
     this.withCounter   = 0;
     this.withStack     = []; // active 'dengan'/'ubah' IIFE param names — innermost last
     this.includeTests  = !!opts.includeTests; // 'gatra uji' compiles with tests active
+    this.currentClassPrivateFields = null; // Set<string> while generating a class body
   }
 
   ind() { return '  '.repeat(this.depth); }
@@ -56,6 +65,9 @@ class CodeGenerator {
       case N.VAR_DECL:       return this.genVarDecl(node);
       case N.FN_DECL:        return this.genFnDecl(node);
       case N.STRUCT_DECL:    return this.genStructDecl(node);
+      case N.CLASS_DECL:     return this.genClassDecl(node);
+      case N.THIS_EXPR:      return 'this';
+      case N.SUPER_EXPR:     return 'super';
       case N.IF_STMT:        return this.genIfStmt(node);
       case N.LOOP_STMT:      return this.genLoopStmt(node);
       case N.WHILE_STMT:     return this.genWhileStmt(node);
@@ -153,17 +165,25 @@ class CodeGenerator {
   }
 
   genPackageImport(node) {
+    if (node.names) {
+      return `import { ${node.names.join(', ')} } from ${JSON.stringify(node.source)};`;
+    }
     return `import * as ${node.localName} from ${JSON.stringify(node.source)};`;
   }
 
   genTopStmt(node) {
     const ind = this.ind();
+    // Go-style visibility: a top-level fn/struct/class/var is only emitted
+    // with 'export' when the file is a package ('paket' declared) AND its
+    // name starts with an uppercase letter. No export/ekspor keyword needed.
+    const exported = (this.isPackage || this.emitExports) && node.name && isPublicName(node.name);
     switch (node.type) {
       case N.FN_DECL:
-        // Auto-export all top-level functions when file has a package declaration,
-        // or when the function itself is explicitly marked 'ekspor'
-        return ind + (this.isPackage || node.isExported ? 'export ' : '') + this.generate(node);
       case N.STRUCT_DECL:
+      case N.CLASS_DECL:
+        return ind + (exported ? 'export ' : '') + this.generate(node);
+      case N.VAR_DECL:
+        return ind + (exported ? 'export ' : '') + this.generate(node) + ';';
       case N.IF_STMT:
       case N.LOOP_STMT:
       case N.WHILE_STMT:
@@ -185,6 +205,7 @@ class CodeGenerator {
     switch (node.type) {
       case N.FN_DECL:
       case N.STRUCT_DECL:
+      case N.CLASS_DECL:
       case N.IF_STMT:
       case N.LOOP_STMT:
       case N.WHILE_STMT:
@@ -280,6 +301,56 @@ class CodeGenerator {
     return `// struct ${node.name} { ${fields} }`;
   }
 
+  genClassDecl(node) {
+    const ext = node.superclass ? ` extends ${node.superclass}` : '';
+    const prevPrivate = this.currentClassPrivateFields;
+    this.currentClassPrivateFields = new Set(
+      node.members.filter(m => m.isPrivate).map(m => m.name)
+    );
+
+    this.depth++;
+    const memberLines = node.members.map(m => this.genClassMember(m)).join('\n\n');
+    this.depth--;
+
+    this.currentClassPrivateFields = prevPrivate;
+    return `class ${node.name}${ext} {\n${memberLines}\n${this.ind()}}`;
+  }
+
+  genClassMember(m) {
+    const ind      = this.ind();
+    const staticKw = m.isStatic ? 'static ' : '';
+
+    switch (m.kind) {
+      case 'field': {
+        const fieldName = m.isPrivate ? `#${m.name}` : m.name;
+        const def = m.default ? ` = ${this.generate(m.default)}` : '';
+        return `${ind}${staticKw}${fieldName}${def};`;
+      }
+      case 'constructor': {
+        const params = this.genParams(m.params);
+        const body   = this.genBlockBody(m.body);
+        return `${ind}constructor(${params}) {\n${body}\n${ind}}`;
+      }
+      case 'method': {
+        const async_ = m.isAsync ? 'async ' : '';
+        const methodName = m.isPrivate ? `#${m.name}` : m.name;
+        const params = this.genParams(m.params);
+        const body   = this.genBlockBody(m.body);
+        return `${ind}${staticKw}${async_}${methodName}(${params}) {\n${body}\n${ind}}`;
+      }
+      case 'getter': {
+        const body = this.genBlockBody(m.body);
+        return `${ind}${staticKw}get ${m.name}() {\n${body}\n${ind}}`;
+      }
+      case 'setter': {
+        const body = this.genBlockBody(m.body);
+        return `${ind}${staticKw}set ${m.name}(${m.paramName}) {\n${body}\n${ind}}`;
+      }
+      default:
+        throw new Error(`CodeGen: unknown class member kind '${m.kind}'`);
+    }
+  }
+
   genIfStmt(node) {
     const cond = this.generate(node.condition);
     const then = this.genBlockBody(node.consequent);
@@ -361,6 +432,12 @@ class CodeGenerator {
       if (node.callee.name === 'gagal')    return `__gatra_gagal(${args})`;
     }
 
+    // induk.konstruk(args)  →  super(args) — JS forbids 'super.constructor(...)'
+    if (typeof node.callee === 'object' && node.callee.type === N.MEMBER_EXPR &&
+        node.callee.object.type === N.SUPER_EXPR && node.callee.member === 'konstruk') {
+      return `super(${args})`;
+    }
+
     // Resolve callee
     let callee;
     if (typeof node.callee === 'string') {
@@ -374,12 +451,19 @@ class CodeGenerator {
       return `console.log(${args})`;
     }
 
-    return `${callee}(${args})`;
+    // ClassName(args)  →  new ClassName(args) (annotated by the typechecker)
+    const newKw = node._isConstruct ? 'new ' : '';
+
+    return `${newKw}${callee}(${args})`;
   }
 
   genMemberExpr(node) {
     const op = node.optional ? '?.' : '.';
-    return `${this.generate(node.object)}${op}${node.member}`;
+    const objJs = this.generate(node.object);
+    if (node.object.type === N.THIS_EXPR && this.currentClassPrivateFields && this.currentClassPrivateFields.has(node.member)) {
+      return `${objJs}${op}#${node.member}`;
+    }
+    return `${objJs}${op}${node.member}`;
   }
 
   genIndexExpr(node) {

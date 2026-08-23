@@ -44,6 +44,9 @@ const NodeType = {
   OBJECT_TRANSFORM_EXPR: 'ObjectTransformExpr', // dengan X { ... } / ubah X { ... }
   MATCH_RESULT_STMT: 'MatchResultStmt', // cocok expr { berhasil(n) => ... gagal(e) => ... }
   MEASURE_STMT: 'MeasureStmt', // ukur "label" { ... }
+  CLASS_DECL: 'ClassDecl',     // kelas Nama [warisi Induk] { ... }
+  THIS_EXPR:  'ThisExpr',      // ini
+  SUPER_EXPR: 'SuperExpr',     // induk
 };
 
 module.exports = { NodeType };

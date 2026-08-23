@@ -38,7 +38,7 @@ function compile(source, opts) {
   const grammar = detectGrammar(source);
   const tokens = tokenize(source);
   const ast = parse(tokens);
-  typecheck(ast, grammar);
+  typecheck(ast, grammar, { filePath: opts && opts.filePath });
   return generate(ast, opts);
 }
 
@@ -104,7 +104,7 @@ function runEsm(sourceFile, js, _sourceCode) {
       const mgSrc = fs.readFileSync(mgAbsPath, "utf8");
       let mgJs;
       try {
-        mgJs = compile(mgSrc);
+        mgJs = compile(mgSrc, { filePath: mgAbsPath, emitExports: true });
       } catch (err) {
         console.error(formatError(err, mgSrc, mgAbsPath));
         process.exit(1);
@@ -164,7 +164,7 @@ function collectOrder(absPath, visited = new Set(), order = []) {
   const source = fs.readFileSync(absPath, "utf8");
   const srcDir = path.dirname(absPath);
 
-  for (const m of source.matchAll(/impor\s+\w+\s+dari\s+"(\.\.?\/[^"]+\.gatra)"/g)) {
+  for (const m of source.matchAll(/impor\s+(?:\{[^}]*\}|\w+)\s+dari\s+"(\.\.?\/[^"]+\.gatra)"/g)) {
     collectOrder(path.resolve(srcDir, m[1]), visited, order);
   }
 
@@ -185,7 +185,7 @@ function cmdBundle(entryFile, outFile, samar) {
   for (const { absPath, source } of order) {
     let js;
     try {
-      js = compile(source);
+      js = compile(source, { filePath: absPath, emitExports: true });
     } catch (err) {
       console.error(formatError(err, source, absPath));
       process.exit(1);
@@ -244,7 +244,7 @@ function cmdRun(filePath) {
 
   let js;
   try {
-    js = compile(source);
+    js = compile(source, { filePath });
   } catch (err) {
     console.error(formatError(err, source, filePath));
     process.exit(1);
@@ -326,7 +326,7 @@ function cmdTest(filePath) {
 
   let js;
   try {
-    js = compile(source, { includeTests: true });
+    js = compile(source, { includeTests: true, filePath });
   } catch (err) {
     console.error(formatError(err, source, filePath));
     process.exit(1);
@@ -361,14 +361,14 @@ function buildWithDeps(filePath, outDir, samar, seen = new Set()) {
   const destDir = outDir ? path.resolve(outDir) : srcDir;
 
   // Compile deps first (depth-first)
-  for (const match of source.matchAll(/impor\s+\w+\s+dari\s+"(\.\.?\/[^"]+\.gatra)"/g)) {
+  for (const match of source.matchAll(/impor\s+(?:\{[^}]*\}|\w+)\s+dari\s+"(\.\.?\/[^"]+\.gatra)"/g)) {
     const depAbs = path.resolve(srcDir, match[1]);
     buildWithDeps(depAbs, outDir, samar, seen);
   }
 
   let js;
   try {
-    js = compile(source);
+    js = compile(source, { filePath: absPath, emitExports: true });
     js = rewriteMgImports(js);
     if (samar) js = obfuscate(js);
   } catch (err) {
@@ -416,7 +416,7 @@ function cmdBuildProject(srcDir, outDir, samar) {
   for (const file of mgFiles) {
     const source = fs.readFileSync(file, "utf8");
     try {
-      let js = compile(source);
+      let js = compile(source, { filePath: file, emitExports: true });
       js = rewriteMgImports(js);
       if (samar) js = obfuscate(js);
       compiled.push({ file, js });

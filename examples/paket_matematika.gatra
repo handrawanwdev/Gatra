@@ -1,20 +1,21 @@
 // paket_matematika.gatra — Contoh file paket (mode Indonesia)
-// Dikompilasi sebagai ES Module dengan fungsi ter-export
+// Dikompilasi sebagai ES Module. Visibility gaya Go: huruf awal besar =
+// publik/terekspor, tidak perlu keyword 'ekspor'.
 
 paket matematika
 
-fungsi tambah(a: angka, b: angka): angka {
+fungsi Tambah(a: angka, b: angka): angka {
   balik a + b
 }
 
-fungsi kurang(a: angka, b: angka): angka {
+fungsi Kurang(a: angka, b: angka): angka {
   balik a - b
 }
 
-fungsi kali(a: angka, b: angka): angka {
+fungsi Kali(a: angka, b: angka): angka {
   balik a * b
 }
 
-fungsi kuadrat(n: angka): angka {
+fungsi Kuadrat(n: angka): angka {
   balik n * n
 }

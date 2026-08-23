@@ -105,6 +105,19 @@ class Linter {
         this.checkBlockBody(node.body.body);
         this.pop();
         return;
+      case N.CLASS_DECL:
+        for (const m of node.members) {
+          if (m.kind === 'field') { this.checkExpr(m.default); continue; }
+          this.push();
+          const params = m.kind === 'setter' ? [{ name: m.paramName }] : (m.params || []);
+          for (const p of params) {
+            if (p.default) this.checkExpr(p.default);
+            this.scope.vars.set(p.name, { line: node.line, col: node.col, used: true });
+          }
+          this.checkBlockBody(m.body.body);
+          this.pop();
+        }
+        return;
       case N.STRUCT_DECL:
         return;
       case N.IF_STMT:

@@ -48,6 +48,7 @@ class Formatter {
       case N.DESTRUCTURE_DECL:  return this.destructureDecl(node);
       case N.FN_DECL:           return this.fnDecl(node);
       case N.STRUCT_DECL:       return this.structDecl(node);
+      case N.CLASS_DECL:        return this.classDecl(node);
       case N.IF_STMT:           return this.ifStmt(node);
       case N.LOOP_STMT:         return this.loopStmt(node);
       case N.WHILE_STMT:        return this.whileStmt(node);
@@ -61,7 +62,10 @@ class Formatter {
       case N.BREAK_STMT:        return 'berhenti';
       case N.CONTINUE_STMT:     return 'lanjut';
       case N.PACKAGE_DECL:      return `paket ${node.name}`;
-      case N.PACKAGE_IMPORT:    return `impor ${node.localName} dari ${JSON.stringify(node.source)}`;
+      case N.PACKAGE_IMPORT:
+        return node.names
+          ? `impor { ${node.names.join(', ')} } dari ${JSON.stringify(node.source)}`
+          : `impor ${node.localName} dari ${JSON.stringify(node.source)}`;
       case N.TYPE_ALIAS_DECL:   return `tipe ${node.name} = ${typeToSource(node.target)}`;
       case N.EXPR_STMT:         return this.expr(node.expr);
       case N.JS_BLOCK_STMT:     return `javascript {${node.code}}`;
@@ -104,10 +108,9 @@ class Formatter {
   }
 
   fnDecl(node) {
-    const ekspor  = node.isExported ? 'ekspor ' : '';
     const async_  = node.isAsync ? 'asinkron ' : '';
     const ret     = node.returnType ? `: ${typeToSource(node.returnType)}` : '';
-    return `${ekspor}fungsi ${async_}${node.name}(${this.params(node.params)})${ret} ${this.block(node.body)}`;
+    return `fungsi ${async_}${node.name}(${this.params(node.params)})${ret} ${this.block(node.body)}`;
   }
 
   structDecl(node) {
@@ -116,6 +119,41 @@ class Formatter {
     const fields = node.fields.map(f => this.ind() + `${f.name}: ${typeToSource(f.type)}`).join('\n');
     this.depth--;
     return `struktur ${node.name} {\n${fields}\n${this.ind()}}`;
+  }
+
+  classDecl(node) {
+    const ext = node.superclass ? ` warisi ${node.superclass}` : '';
+    if (node.members.length === 0) return `kelas ${node.name}${ext} {}`;
+    this.depth++;
+    const members = node.members.map(m => this.ind() + this.classMember(m)).join('\n\n');
+    this.depth--;
+    return `kelas ${node.name}${ext} {\n${members}\n${this.ind()}}`;
+  }
+
+  classMember(m) {
+    const staticKw  = m.isStatic ? 'statis ' : '';
+    const privateKw = m.isPrivate ? 'privat ' : '';
+    switch (m.kind) {
+      case 'field': {
+        const def = m.default ? ` = ${this.expr(m.default)}` : '';
+        return `${staticKw}${privateKw}${m.name}: ${typeToSource(m.type)}${def}`;
+      }
+      case 'constructor':
+        return `konstruk(${this.params(m.params)}) ${this.block(m.body)}`;
+      case 'method': {
+        const async_ = m.isAsync ? 'asinkron ' : '';
+        const ret    = m.returnType ? `: ${typeToSource(m.returnType)}` : '';
+        return `${staticKw}${privateKw}${async_}${m.name}(${this.params(m.params)})${ret} ${this.block(m.body)}`;
+      }
+      case 'getter': {
+        const ret = m.returnType ? `: ${typeToSource(m.returnType)}` : '';
+        return `${staticKw}ambil ${m.name}()${ret} ${this.block(m.body)}`;
+      }
+      case 'setter':
+        return `${staticKw}atur ${m.name}(${m.paramName}: ${typeToSource(m.paramType)}) ${this.block(m.body)}`;
+      default:
+        throw new Error(`Formatter: unknown class member kind '${m.kind}'`);
+    }
   }
 
   ifStmt(node) {
@@ -180,6 +218,8 @@ class Formatter {
       case N.STRING_LITERAL: return JSON.stringify(node.value);
       case N.BOOL_LITERAL:   return node.value ? 'benar' : 'salah';
       case N.NULL_LITERAL:   return 'kosong';
+      case N.THIS_EXPR:      return 'ini';
+      case N.SUPER_EXPR:     return 'induk';
       case N.BINARY_EXPR:    return `${this.expr(node.left)} ${node.op} ${this.expr(node.right)}`;
       case N.UNARY_EXPR:     return `${node.op}${this.expr(node.operand)}`;
       case N.ASSIGN_EXPR:    return `${this.expr(node.target)} = ${this.expr(node.value)}`;

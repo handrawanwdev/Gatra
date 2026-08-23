@@ -1,4 +1,4 @@
-// 14_tipe_alias_dan_ekspor.gatra — 'tipe' (alias tipe) dan 'ekspor'
+// 14_tipe_alias_dan_ekspor.gatra — 'tipe' (alias tipe) dan visibility (ekspor)
 
 // 'tipe' membuat nama baru untuk tipe yang sudah ada
 tipe UserId = angka
@@ -9,12 +9,15 @@ fungsi ambilPengguna(id: UserId): Nama {
 }
 cetak(ambilPengguna(7))
 
-// 'ekspor' menandai fungsi supaya bisa dipakai modul lain
-// (lihat examples/paket_matematika.gatra + paket_utama.gatra untuk contoh impor penuh)
-ekspor fungsi tambahDua(n: angka): angka {
+// Visibility gaya Go, bukan keyword: huruf awal BESAR pada nama fungsi/
+// struktur/kelas/variabel level modul = publik/terekspor (bisa diimpor modul
+// lain lewat 'impor { TambahDua } dari "./14_tipe_alias_dan_ekspor"'), huruf
+// awal kecil = internal (lihat examples/paket_matematika.gatra +
+// paket_utama.gatra untuk contoh impor lintas-modul penuh).
+fungsi TambahDua(n: angka): angka {
   balik n + 2
 }
-cetak(tambahDua(40))
+cetak(TambahDua(40))
 
 // tipe alias untuk tipe opsional
 tipe Mungkin = teks?

@@ -9,13 +9,14 @@ isi skor: larik<angka> = [90, 80, 70]
 // peta<K, V> — direpresentasikan sebagai objek JS biasa
 isi nilai: peta<teks, angka> = { budi: 90, siti: 95 }
 
-// ekspor — tanda fungsi bisa dipakai modul lain
-ekspor fungsi ambilSkorSiti(id: UserId): angka {
+// Visibility gaya Go — huruf awal besar pada nama fungsi = publik/terekspor,
+// tidak perlu keyword 'ekspor'
+fungsi AmbilSkorSiti(id: UserId): angka {
   balik nilai.siti
 }
 
 cetak(skor)
-cetak(ambilSkorSiti(1))
+cetak(AmbilSkorSiti(1))
 
 // buat — awalan opsional sebelum inisialisasi struktur
 struktur Titik {

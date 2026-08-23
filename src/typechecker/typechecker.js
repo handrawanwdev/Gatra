@@ -3,6 +3,8 @@
 const { NodeType: N } = require('../ast/nodes');
 const { SymbolTable }  = require('./symbol-table');
 const { makeErrors }   = require('./type-errors');
+const { resolveLocalPath, getModuleExports } = require('../module/resolver');
+const fs = require('fs');
 
 // Tipe numerik: 'number' (angka, generik) mencakup 'int' (bilangan), 'float'
 // (pecahan), dan 'byte'. 'numeric' pada pairs berarti "salah satu dari ini".
@@ -34,13 +36,18 @@ const OPERATOR_RULES = {
 };
 
 class TypeChecker {
-  constructor(grammar) {
+  constructor(grammar, opts = {}) {
     this.grammar    = grammar || 'en';
     this.err        = makeErrors(this.grammar);
     this.symbols    = new SymbolTable();
     this.currentFn  = null; // { name, returnType } of the fn being checked
     this.typeAliases = {}; // name → canonical target type (from 'tipe' declarations)
     this.withStack   = []; // active 'dengan'/'ubah' source vars — bare identifiers inside their fields resolve as member access, not a normal lookup
+    // Absolute path of the file being checked — needed to resolve relative
+    // 'impor' sources for cross-module Go-style visibility checks. Without
+    // it (e.g. checking an in-memory snippet), local imports fall back to
+    // the old lax/untyped behavior instead of hard-erroring.
+    this.filePath = opts.filePath ? require('path').resolve(opts.filePath) : null;
 
     // Built-in functions registered in the global scope
     this.symbols.define('__print__', {
@@ -79,6 +86,7 @@ class TypeChecker {
       case N.DESTRUCTURE_DECL:  return this.checkDestructureDecl(node);
       case N.FN_DECL:           return this.checkFnDecl(node);
       case N.STRUCT_DECL:    return this.checkStructDecl(node);
+      case N.CLASS_DECL:     return this.checkClassDecl(node);
       case N.IF_STMT:        return this.checkIfStmt(node);
       case N.LOOP_STMT:      return this.checkLoopStmt(node);
       case N.WHILE_STMT:     return this.checkWhileStmt(node);
@@ -172,17 +180,91 @@ class TypeChecker {
   }
 
   checkPackageImport(node) {
+    const localPath = (node.source.startsWith('.') && this.filePath)
+      ? resolveLocalPath(this.filePath, node.source)
+      : null;
+
+    if (node.names) {
+      // impor { Nama1, Nama2 } dari "path" — named import, Go-style visibility enforced
+      for (const name of node.names) {
+        if (this.symbols.existsInCurrent(name)) {
+          throw this.err.duplicateVar(name, node.line, node.col);
+        }
+      }
+
+      if (localPath) {
+        if (!fs.existsSync(localPath)) {
+          const { makePackageErrors } = require('../package/package-errors');
+          throw makePackageErrors(this.grammar).notFound(node.names.join(', '), node.source, node.line, node.col);
+        }
+        const exportsMap = getModuleExports(localPath);
+        for (const name of node.names) {
+          const entry = exportsMap.get(name);
+          if (!entry) {
+            const { makePackageErrors } = require('../package/package-errors');
+            throw makePackageErrors(this.grammar).identifierNotFound(name, node.source, node.line, node.col);
+          }
+          if (!entry.public) {
+            const { makePackageErrors } = require('../package/package-errors');
+            throw makePackageErrors(this.grammar).accessDenied(name, node.line, node.col);
+          }
+          this.defineImportedName(name, entry, node);
+        }
+      } else {
+        // External package or no filePath context — untyped, same laxness as namespace imports
+        for (const name of node.names) {
+          this.symbols.define(name, { kind: 'var', type: 'unknown', mutable: true, line: node.line, col: node.col });
+        }
+      }
+      return;
+    }
+
     if (this.symbols.existsInCurrent(node.localName)) {
       throw this.err.duplicateVar(node.localName, node.line, node.col);
     }
-    // Register namespace as 'package' kind — member access returns 'unknown'
+    // Register namespace as 'package' kind — member access returns 'unknown',
+    // except for a Go-style visibility check against internal (lowercase) members.
     this.symbols.define(node.localName, {
       kind: 'package',
       packageName: node.localName,
       source: node.source,
+      resolvedPath: localPath && fs.existsSync(localPath) ? localPath : null,
       line: node.line,
       col:  node.col,
     });
+  }
+
+  // Copies a resolved cross-module declaration into the local scope so the
+  // imported name typechecks like the real thing (struct field access,
+  // fn call arity, class instantiation) rather than degrading to 'unknown'.
+  defineImportedName(name, entry, node) {
+    const d = entry.decl;
+    switch (entry.kind) {
+      case 'fn':
+        this.symbols.define(name, {
+          kind: 'fn', name, params: d.params, returnType: d.returnType || 'void',
+          line: node.line, col: node.col,
+        });
+        return;
+      case 'struct':
+        this.symbols.define(name, {
+          kind: 'struct', name, fields: d.fields,
+          line: node.line, col: node.col,
+        });
+        return;
+      case 'class':
+        this.symbols.define(name, {
+          kind: 'class', name, superclass: d.superclass, members: d.members,
+          line: node.line, col: node.col,
+        });
+        return;
+      case 'type':
+        this.typeAliases[name] = d.target;
+        this.symbols.define(name, { kind: 'var', type: 'unknown', mutable: false, line: node.line, col: node.col });
+        return;
+      default:
+        this.symbols.define(name, { kind: 'var', type: 'unknown', mutable: true, line: node.line, col: node.col });
+    }
   }
 
   checkVarDecl(node) {
@@ -272,6 +354,59 @@ class TypeChecker {
       kind: 'struct', name: node.name, fields: node.fields,
       line: node.line, col: node.col,
     });
+  }
+
+  checkClassDecl(node) {
+    if (this.symbols.existsInCurrent(node.name)) {
+      throw this.err.duplicateVar(node.name, node.line, node.col);
+    }
+
+    if (node.superclass) {
+      const superInfo = this.symbols.lookup(node.superclass);
+      if (!superInfo || superInfo.kind !== 'class') {
+        throw this.err.unknownType(node.superclass, node.line, node.col);
+      }
+    }
+
+    // Register before checking bodies so methods can reference the class
+    // itself (e.g. a 'statis' factory method returning a new instance).
+    this.symbols.define(node.name, {
+      kind: 'class', name: node.name, superclass: node.superclass,
+      members: node.members,
+      line: node.line, col: node.col,
+    });
+
+    const prevFn = this.currentFn;
+
+    for (const m of node.members) {
+      if (m.kind === 'field') {
+        if (m.default) this.inferExpr(m.default);
+        continue;
+      }
+
+      this.symbols.push();
+
+      let params = [];
+      if (m.kind === 'constructor' || m.kind === 'method') params = m.params;
+      else if (m.kind === 'setter') params = [{ name: m.paramName, type: m.paramType }];
+
+      for (const p of params) {
+        if (p.default) this.inferExpr(p.default);
+        this.symbols.define(p.name, {
+          kind: 'var', type: p.type, mutable: false, line: m.line, col: m.col,
+        });
+      }
+
+      this.currentFn = {
+        name: `${node.name}.${m.name || 'konstruk'}`,
+        returnType: m.returnType || 'void',
+        isAsync: m.isAsync || false,
+      };
+      for (const s of m.body.body) this.checkStmt(s);
+      this.currentFn = prevFn;
+
+      this.symbols.pop();
+    }
   }
 
   checkIfStmt(node) {
@@ -401,6 +536,8 @@ class TypeChecker {
       case N.AWAIT_EXPR:     return this.inferAwaitExpr(node);
       case N.FUNC_EXPR:      return this.inferFuncExpr(node);
       case N.NULL_LITERAL:   return 'null';
+      case N.THIS_EXPR:      return 'unknown';
+      case N.SUPER_EXPR:     return 'unknown';
       case N.OBJECT_LITERAL: return this.inferObjectLiteral(node);
       case N.OBJECT_TRANSFORM_EXPR: return this.inferObjectTransformExpr(node);
       case N.TEMPLATE_EXPR:  return this.inferTemplateExpr(node);
@@ -523,7 +660,10 @@ class TypeChecker {
       if (node.callee.type === N.IDENTIFIER) {
         return this.inferNamedCall(node.callee.name, node.args, node);
       }
-      // Method calls on objects (Phase 4): skip type checking, resolve args
+      // Method calls on objects (Phase 4): skip type checking, but still
+      // visit the callee (e.g. mat.internal(...)) so Go-style visibility on
+      // namespace member access is enforced even in call position.
+      if (node.callee.type === N.MEMBER_EXPR) this.inferExpr(node.callee);
       for (const a of node.args) this.inferExpr(a);
       return 'unknown';
     }
@@ -545,6 +685,14 @@ class TypeChecker {
     if (info.kind === 'package') {
       for (const a of args) this.inferExpr(a);
       return 'unknown';
+    }
+
+    // ClassName(args)  →  instantiation ('buat ClassName(args)' works too since
+    // 'buat' is a no-op prefix). Codegen emits 'new ClassName(args)'.
+    if (info.kind === 'class') {
+      for (const a of args) this.inferExpr(a);
+      node._isConstruct = true;
+      return info.name;
     }
 
     if (info.kind !== 'fn') throw this.err.notAFunction(name, node.line, node.col);
@@ -594,7 +742,24 @@ class TypeChecker {
 
   inferMemberExpr(node) {
     const objType = this.inferExpr(node.object);
-    if (objType === 'unknown') return 'unknown';
+    if (objType === 'unknown') {
+      // Go-style visibility check for namespace-style access (mat.internal) —
+      // only enforced when the target is a resolved local .gatra module and
+      // the member is a known-internal (lowercase) top-level declaration.
+      if (node.object.type === N.IDENTIFIER) {
+        const sym = this.symbols.lookup(node.object.name);
+        if (sym && sym.kind === 'package' && sym.resolvedPath) {
+          let exportsMap = null;
+          try { exportsMap = getModuleExports(sym.resolvedPath); } catch (e) { /* best-effort */ }
+          const entry = exportsMap && exportsMap.get(node.member);
+          if (entry && !entry.public) {
+            const { makePackageErrors } = require('../package/package-errors');
+            throw makePackageErrors(this.grammar).accessDenied(node.member, node.line, node.col);
+          }
+        }
+      }
+      return 'unknown';
+    }
 
     const structInfo = this.symbols.lookup(objType);
     if (!structInfo || structInfo.kind !== 'struct') {
@@ -784,8 +949,8 @@ class TypeChecker {
   }
 }
 
-function typecheck(ast, grammar) {
-  new TypeChecker(grammar).check(ast);
+function typecheck(ast, grammar, opts) {
+  new TypeChecker(grammar, opts).check(ast);
 }
 
 module.exports = { TypeChecker, typecheck };

@@ -35,6 +35,22 @@ function makePackageErrors(grammar) {
         : `Import '${name}' already declared`;
       return e(msg, line, col);
     },
+
+    // Go-style visibility: identifier exists in the module but its first
+    // letter is lowercase (internal/unexported).
+    accessDenied(identName, line, col) {
+      const msg = isID
+        ? `\`${identName}\` tidak dapat diakses dari modul ini.\nIdentifier dengan huruf awal kecil bersifat internal.`
+        : `\`${identName}\` cannot be accessed from this module.\nIdentifiers starting with a lowercase letter are internal.`;
+      return new PackageError('GALAT AKSES', msg, line, col);
+    },
+
+    identifierNotFound(identName, source, line, col) {
+      const msg = isID
+        ? `'${identName}' tidak ditemukan di modul '${source}'`
+        : `'${identName}' not found in module '${source}'`;
+      return e(msg, line, col);
+    },
   };
 }
 

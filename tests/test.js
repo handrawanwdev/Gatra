@@ -38,14 +38,14 @@ function assertEqual(a, b) {
 function compile(src, opts) {
   const grammar = detectGrammar(src);
   const ast     = parse(tokenize(src));
-  typecheck(ast, grammar);
+  typecheck(ast, grammar, { filePath: opts && opts.filePath });
   return generate(ast, opts);
 }
 
-function tc(src) {
+function tc(src, opts) {
   const grammar = detectGrammar(src);
   const ast     = parse(tokenize(src));
-  typecheck(ast, grammar);
+  typecheck(ast, grammar, { filePath: opts && opts.filePath });
 }
 
 function exec(src) {
@@ -635,26 +635,31 @@ run('codegen: impor → ES module import statement', () => {
   assert(js.includes('import * as fs from "fs";'));
 });
 
-run('codegen: fungsi in paket gets export prefix', () => {
-  const js = compile('paket matematika\nfungsi tambah(a: angka, b: angka): angka { balik a + b }');
-  assert(js.includes('export function tambah'));
+run('codegen: capitalized fungsi in paket gets export prefix (Go-style visibility)', () => {
+  const js = compile('paket matematika\nfungsi Tambah(a: angka, b: angka): angka { balik a + b }');
+  assert(js.includes('export function Tambah'));
 });
 
-run('codegen: fungsi WITHOUT paket has no export', () => {
-  const js = compile('fungsi tambah(a: angka, b: angka): angka { balik a + b }');
-  assert(!js.includes('export function'));
+run('codegen: lowercase fungsi in paket stays internal (no export)', () => {
+  const js = compile('paket matematika\nfungsi tambah(a: angka, b: angka): angka { balik a + b }');
+  assert(!js.includes('export function tambah'));
   assert(js.includes('function tambah'));
 });
 
-run('codegen: top-level var in paket NOT exported', () => {
-  const js = compile('paket counter\nisi count = 0');
-  assert(!js.includes('export let'));
-  assert(!js.includes('export const'));
-  assert(js.includes('count'));
+run('codegen: fungsi WITHOUT paket has no export even if capitalized', () => {
+  const js = compile('fungsi Tambah(a: angka, b: angka): angka { balik a + b }');
+  assert(!js.includes('export function'));
+  assert(js.includes('function Tambah'));
+});
+
+run('codegen: top-level var in paket NOT exported unless capitalized', () => {
+  const js = compile('paket counter\nisi count = 0\nisi Batas = 100');
+  assert(!js.includes('export let count'));
+  assert(js.includes('export let Batas'));
 });
 
 run('codegen: imports emitted before functions', () => {
-  const js = compile('paket util\nimpor path dari "path"\nfungsi resolve(): teks { balik path.join(".") }');
+  const js = compile('paket util\nimpor path dari "path"\nfungsi Resolve(): teks { balik path.join(".") }');
   const importIdx = js.indexOf('import * as path');
   const exportIdx = js.indexOf('export function');
   assert(importIdx < exportIdx);
@@ -666,9 +671,9 @@ run('codegen: multiple imports all emitted', () => {
   assert(js.includes('import * as path from "path";'));
 });
 
-run('codegen: paket + fungsi → export function', () => {
-  const js = compile('paket matematika\nfungsi tambah(a: angka, b: angka): angka { balik a + b }');
-  assert(js.includes('export function tambah'));
+run('codegen: paket + capitalized fungsi → export function', () => {
+  const js = compile('paket matematika\nfungsi Tambah(a: angka, b: angka): angka { balik a + b }');
+  assert(js.includes('export function Tambah'));
 });
 
 run('codegen: local file source preserved as-is', () => {
@@ -706,10 +711,10 @@ run('full pipeline: paket file (no actual module resolution)', () => {
   const js = compile(`
 paket keamanan
 impor crypto dari "crypto"
-fungsi hash(x: teks): teks { balik x }
+fungsi Hash(x: teks): teks { balik x }
 `);
   assert(js.includes('import * as crypto from "crypto";'));
-  assert(js.includes('export function hash'));
+  assert(js.includes('export function Hash'));
 });
 
 run('full pipeline: consumer file with namespace call', () => {
@@ -726,11 +731,11 @@ run('full pipeline: paket with private state var', () => {
   const js = compile(`
 paket counter
 isi ubah count = 0
-fungsi tambah() { count = count + 1 }
-fungsi total(): angka { balik count }
+fungsi Tambah() { count = count + 1 }
+fungsi Total(): angka { balik count }
 `);
-  assert(js.includes('export function tambah'));
-  assert(js.includes('export function total'));
+  assert(js.includes('export function Tambah'));
+  assert(js.includes('export function Total'));
   assert(!js.includes('export let'));
 });
 
@@ -1245,24 +1250,17 @@ run('codegen: tipe alias emits no JS output', () => {
   assert(!js.includes('UserId'), `got: ${js}`);
 });
 
-// ekspor (export)
+// Go-style visibility — no 'ekspor'/'export' keyword. Capitalized first
+// letter = public/exported, lowercase = internal. See '── Go-style
+// visibility ──' section further down for the full cross-module test suite.
 
-run('tokenizes ekspor as keyword export', () => {
-  assertEqual(tokenize('ekspor').find(t => t.type === 'KEYWORD').value, 'export');
+run('"ekspor" is no longer a keyword — tokenizes as a plain identifier', () => {
+  assertEqual(tokenize('ekspor').find(t => t.type === 'IDENTIFIER')?.value, 'ekspor');
 });
 
-run('parse: ekspor fungsi sets isExported=true', () => {
-  const ast = parse(tokenize('ekspor fungsi tambah(a: angka, b: angka): angka { balik a + b }'));
-  assertEqual(ast.body[0].isExported, true);
-});
-
-run('codegen: ekspor fungsi emits export keyword', () => {
-  const js = compile('ekspor fungsi tambah(a: angka, b: angka): angka { balik a + b }');
-  assert(js.includes('export function tambah'), `got: ${js}`);
-});
-
-run('rejects ekspor before non-fungsi', () => {
-  assertThrows(() => parse(tokenize('ekspor struktur Titik { x: angka }')), "'ekspor' hanya berlaku untuk 'fungsi'");
+run('"ekspor" still usable as an ordinary identifier (function/variable name)', () => {
+  const js = compile('fungsi ekspor(x: angka): angka { balik x }\nisi ekspor2 = ekspor(5)\ncetak(ekspor2)');
+  assert(js.includes('function ekspor('), js);
 });
 
 // buat (optional 'new' prefix before struct init)
@@ -1502,10 +1500,11 @@ run('formatter: renders opsional type with ? suffix', () => {
   assert(out.includes('teks?'), out);
 });
 
-run('formatter: renders ekspor/asinkron/tipe alias', () => {
-  const out = format('tipe UserId = angka\nekspor fungsi asinkron ambil(id: UserId): angka { balik id }');
+run('formatter: renders asinkron/tipe alias (no ekspor keyword)', () => {
+  const out = format('tipe UserId = angka\nfungsi asinkron Ambil(id: UserId): angka { balik id }');
   assert(out.includes('tipe UserId = angka'), out);
-  assert(out.includes('ekspor fungsi asinkron ambil'), out);
+  assert(out.includes('fungsi asinkron Ambil'), out);
+  assert(!out.includes('ekspor'), out);
 });
 
 // ── Pengelola Paket (gatra mulai) ────────────────────────────────────────────
@@ -2156,6 +2155,343 @@ run('executes: ukur still logs duration even when the body returns early', () =>
   } finally {
     require('fs').rmSync(tmp, { force: true });
   }
+});
+
+// ── kelas: constructor / method / static / extends / super / getter / setter / private ──
+
+console.log('\n── kelas ───────────────────────────────────────────────────────');
+
+run('parse: kelas produces a ClassDecl with fields, constructor, and methods', () => {
+  const ast = parse(tokenize('kelas Pengguna {\n  nama: teks\n  konstruk(nama: teks) {\n    ini.nama = nama\n  }\n  sapa() {\n    cetak(ini.nama)\n  }\n}'));
+  const node = ast.body[0];
+  assertEqual(node.type, N.CLASS_DECL);
+  assertEqual(node.members.filter(m => m.kind === 'field').length, 1);
+  assertEqual(node.members.filter(m => m.kind === 'constructor').length, 1);
+  assertEqual(node.members.filter(m => m.kind === 'method').length, 1);
+});
+
+run('parse: kelas warisi produces a superclass name', () => {
+  const ast = parse(tokenize('kelas Kucing warisi Hewan {}'));
+  assertEqual(ast.body[0].superclass, 'Hewan');
+});
+
+run('parse: ini/induk produce ThisExpr/SuperExpr', () => {
+  const ast = parse(tokenize('kelas X warisi Y {\n  konstruk() {\n    induk.konstruk()\n    ini.a = 1\n  }\n}'));
+  const ctor = ast.body[0].members[0];
+  const superCall = ctor.body.body[0].expr;
+  assertEqual(superCall.callee.object.type, N.SUPER_EXPR);
+  assertEqual(ctor.body.body[1].expr.target.object.type, N.THIS_EXPR);
+});
+
+run('parse: statis/privat modifiers on class members', () => {
+  const ast = parse(tokenize('kelas X {\n  statis privat rahasia: angka = 1\n  statis bantu() {}\n}'));
+  const field = ast.body[0].members[0];
+  assertEqual(field.isStatic, true);
+  assertEqual(field.isPrivate, true);
+  assertEqual(ast.body[0].members[1].isStatic, true);
+});
+
+run("parse: 'ambil'/'atur' outside a getter/setter position stay plain identifiers (no false-positive keyword collision)", () => {
+  const ast = parse(tokenize('fungsi ambil(): angka { balik 1 }\nisi atur = 5'));
+  assertEqual(ast.body[0].name, 'ambil');
+  assertEqual(ast.body[1].name, 'atur');
+});
+
+run("parse: 'ambil nama()' inside a kelas is read as a getter, not a field/method named 'ambil'", () => {
+  const ast = parse(tokenize('kelas X {\n  ambil saldo(): angka {\n    balik 1\n  }\n}'));
+  assertEqual(ast.body[0].members[0].kind, 'getter');
+  assertEqual(ast.body[0].members[0].name, 'saldo');
+});
+
+run("parse: a method literally named 'ambil' (single identifier + paren) is NOT mistaken for a getter", () => {
+  const ast = parse(tokenize('kelas X {\n  ambil(): angka {\n    balik 1\n  }\n}'));
+  assertEqual(ast.body[0].members[0].kind, 'method');
+  assertEqual(ast.body[0].members[0].name, 'ambil');
+});
+
+run('typechecker: unknown superclass is rejected', () => {
+  assertThrows(() => tc('kelas X warisi TidakAda {}'), "'TidakAda'");
+});
+
+run('typechecker: ClassName(args) call infers the class name as its type and marks _isConstruct', () => {
+  const ast = parse(tokenize('kelas Titik {\n  konstruk(x: angka) {\n    ini.x = x\n  }\n}\nisi p = Titik(1)'));
+  typecheck(ast, 'id');
+  const callNode = ast.body[1].value;
+  assertEqual(callNode._isConstruct, true);
+  assertEqual(callNode._type, 'Titik');
+});
+
+run('codegen: kelas compiles to a real JS class with constructor/method', () => {
+  const js = compile('kelas Pengguna {\n  nama: teks\n  konstruk(nama: teks) {\n    ini.nama = nama\n  }\n  sapa() {\n    cetak(ini.nama)\n  }\n}');
+  assert(js.includes('class Pengguna {'), js);
+  assert(js.includes('constructor(nama) {'), js);
+  assert(js.includes('this.nama = nama;'), js);
+  assert(js.includes('sapa() {'), js);
+});
+
+run('codegen: ClassName(args) compiles to new ClassName(args)', () => {
+  const js = compile('kelas Titik {\n  konstruk(x: angka) {\n    ini.x = x\n  }\n}\nisi p = Titik(1)');
+  assert(js.includes('let p = new Titik(1)'), js);
+});
+
+run("codegen: 'buat ClassName(args)' also compiles to new ClassName(args) (buat is a no-op prefix)", () => {
+  const js = compile('kelas Titik {\n  konstruk(x: angka) {\n    ini.x = x\n  }\n}\nisi p = buat Titik(1)');
+  assert(js.includes('let p = new Titik(1)'), js);
+});
+
+run('codegen: kelas warisi compiles to extends, induk.konstruk() to super(), induk.x() to super.x()', () => {
+  const js = compile('kelas A {\n  konstruk() {}\n  m() {}\n}\nkelas B warisi A {\n  konstruk() {\n    induk.konstruk()\n  }\n  m() {\n    induk.m()\n  }\n}');
+  assert(js.includes('class B extends A {'), js);
+  assert(js.includes('super();'), js);
+  assert(js.includes('super.m();'), js);
+  assert(!js.includes('super.konstruk'), js);
+});
+
+run('codegen: privat field compiles to a real JS #private field, accessed via this.#name', () => {
+  const js = compile('kelas Akun {\n  privat saldo: angka = 0\n  konstruk() {\n    ini.saldo = 1\n  }\n}');
+  assert(js.includes('#saldo = 0;'), js);
+  assert(js.includes('this.#saldo = 1;'), js);
+  assert(!js.includes('this.saldo'), js);
+});
+
+run('codegen: getter/setter compile to real JS get/set accessors', () => {
+  const js = compile('kelas Akun {\n  privat saldo: angka = 0\n  ambil saldo(): angka {\n    balik ini.saldo\n  }\n  atur saldo(v: angka) {\n    ini.saldo = v\n  }\n}');
+  assert(js.includes('get saldo() {'), js);
+  assert(js.includes('set saldo(v) {'), js);
+});
+
+run('codegen: statis method compiles to a real JS static method', () => {
+  const js = compile('kelas Akun {\n  konstruk() {}\n  statis buatKosong(): Akun {\n    balik Akun()\n  }\n}');
+  assert(js.includes('static buatKosong() {'), js);
+});
+
+run('executes: full inheritance chain — constructor, super(), overridden method, super.method()', () => {
+  const out = exec('kelas Hewan {\n  konstruk(nama: teks) {\n    ini.nama = nama\n  }\n  sapa() {\n    cetak("..." + ini.nama)\n  }\n}\nkelas Kucing warisi Hewan {\n  konstruk(nama: teks) {\n    induk.konstruk(nama)\n  }\n  sapa() {\n    induk.sapa()\n    cetak("Meong")\n  }\n}\nisi k = Kucing("Tom")\nk.sapa()');
+  assertEqual(out[0], '...Tom');
+  assertEqual(out[1], 'Meong');
+});
+
+run('executes: private field is genuinely inaccessible from outside the class (real JS #field)', () => {
+  // 'privat' compiles to a real JS #field. Outside the class 'a.saldo' is a plain
+  // property lookup on an object that has no such key — it reads undefined, it
+  // does not throw (only textual a.#saldo outside the class body would throw/SyntaxError).
+  assert(!/this\.saldo\b/.test(compile('kelas Akun {\n  privat saldo: angka = 0\n  konstruk(s: angka) {\n    ini.saldo = s\n  }\n}')), 'privat field must compile to #saldo, not this.saldo');
+  const out = exec('kelas Akun {\n  privat saldo: angka = 0\n  konstruk(s: angka) {\n    ini.saldo = s\n  }\n}\nisi a = Akun(50)\ncetak(a.saldo)');
+  assertEqual(out[0], ''); // mock console: [].join(' ') on [undefined] stringifies to ''
+});
+
+run('executes: getter/setter round-trip through a private field', () => {
+  const out = exec('kelas Akun {\n  privat saldo: angka = 0\n  konstruk(s: angka) {\n    ini.saldo = s\n  }\n  ambil saldo(): angka {\n    balik ini.saldo\n  }\n  atur saldo(v: angka) {\n    ini.saldo = v\n  }\n}\nisi a = Akun(10)\ncetak(a.saldo)\na.saldo = 77\ncetak(a.saldo)');
+  assertEqual(out[0], '10');
+  assertEqual(out[1], '77');
+});
+
+run('linter: class method params do not trigger unused-variable warnings', () => {
+  const ast = parse(tokenize('kelas X {\n  konstruk(a: angka) {\n    ini.a = a\n  }\n}'));
+  assertEqual(lint(ast).length, 0);
+});
+
+run('formatter: kelas round-trips (warisi, konstruk, ambil/atur, statis, privat)', () => {
+  const src = 'kelas Akun {\n  privat saldo: angka = 0\n\n  konstruk(s: angka) {\n    ini.saldo = s\n  }\n\n  ambil saldo(): angka {\n    balik ini.saldo\n  }\n\n  atur saldo(v: angka) {\n    ini.saldo = v\n  }\n\n  statis buatKosong(): Akun {\n    balik Akun(0)\n  }\n}';
+  const once = format(src);
+  assert(once.includes('kelas Akun {'), once);
+  assert(once.includes('privat saldo: angka = 0'), once);
+  assert(once.includes('konstruk(s: angka)'), once);
+  assert(once.includes('ambil saldo(): angka'), once);
+  assert(once.includes('atur saldo(v: angka)'), once);
+  assert(once.includes('statis buatKosong(): Akun'), once);
+  assertEqual(once, format(once));
+});
+
+run('formatter: kelas warisi / ini / induk round-trip', () => {
+  const src = 'kelas Kucing warisi Hewan {\n  konstruk(nama: teks) {\n    induk.konstruk(nama)\n  }\n\n  sapa() {\n    induk.sapa()\n    cetak(ini.nama)\n  }\n}';
+  const once = format(src);
+  assert(once.includes('kelas Kucing warisi Hewan {'), once);
+  assert(once.includes('induk.konstruk(nama)'), once);
+  assert(once.includes('induk.sapa()'), once);
+  assert(once.includes('cetak(ini.nama)'), once);
+  assertEqual(once, format(once));
+});
+
+console.log('\n── Go-style visibility ─────────────────────────────────────────');
+
+// Identifier visibility follows Go: capitalized first letter = public
+// (exported), lowercase = internal. No public/private/export keyword.
+// 'impor { Nama } dari "path"' is the new named-import syntax; the old
+// namespace form 'impor ns dari "path"' also enforces the rule on member
+// access (ns.internal is a compile error).
+
+const { isPublicName } = require('../src/module/visibility');
+const fs   = require('fs');
+const path = require('path');
+const os   = require('os');
+const { spawnSync } = require('child_process');
+
+run('isPublicName: capitalized = public, lowercase = internal', () => {
+  assert(isPublicName('Tambah'));
+  assert(isPublicName('UserId'));
+  assert(!isPublicName('validasi'));
+  assert(!isPublicName('_privateish'));
+});
+
+run('parse: impor { A, B } dari "path" produces PackageImport with names[]', () => {
+  const ast = parse(tokenize('impor { Tambah, Kurang } dari "./matematika"'));
+  assertEqual(ast.body[0].type, N.PACKAGE_IMPORT);
+  assertEqual(ast.body[0].localName, null);
+  assertEqual(ast.body[0].names.join(','), 'Tambah,Kurang');
+});
+
+run('parse: namespace impor still has names=null', () => {
+  const ast = parse(tokenize('impor mat dari "./matematika"'));
+  assertEqual(ast.body[0].localName, 'mat');
+  assertEqual(ast.body[0].names, null);
+});
+
+run('codegen: named import compiles to ES module destructured import', () => {
+  const js = compile('impor { Tambah, Kurang } dari "./matematika"');
+  assert(js.includes('import { Tambah, Kurang } from "./matematika";'), js);
+});
+
+run('formatter: named import round-trips', () => {
+  const src = 'impor { Tambah, Kurang } dari "./matematika"';
+  const once = format(src);
+  assert(once.includes('impor { Tambah, Kurang } dari "./matematika"'), once);
+  assertEqual(once, format(once));
+});
+
+run('codegen: paket only exports capitalized top-level names (fn/struct/kelas/var)', () => {
+  const js = compile(`
+paket matematika
+fungsi Tambah(a: angka, b: angka): angka { balik a + b }
+fungsi validasi(a: angka): logika { balik a > 0 }
+struktur Titik { x: angka, y: angka }
+struktur titikInternal { x: angka }
+kelas Akun { konstruk() {} }
+kelas akunInternal { konstruk() {} }
+isi Batas = 100
+isi batasInternal = 1
+`);
+  assert(js.includes('export function Tambah'), js);
+  assert(!js.includes('export function validasi'), js);
+  assert(js.includes('export class Akun'), js);
+  assert(!js.includes('export class akunInternal'), js);
+  assert(js.includes('export let Batas'), js);
+  assert(!js.includes('export let batasInternal'), js);
+});
+
+// ── Cross-module access control (real files on disk) ───────────────────────
+
+function withModuleDir(files, fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatra_visibility_'));
+  try {
+    for (const [name, content] of Object.entries(files)) {
+      fs.writeFileSync(path.join(dir, name), content, 'utf8');
+    }
+    return fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const MATEMATIKA_SRC = `fungsi Tambah(a: angka, b: angka): angka {
+  balik a + b
+}
+
+fungsi validasi(a: angka): logika {
+  balik a > 0
+}
+`;
+
+run('typechecker: named import of a public identifier succeeds', () => {
+  withModuleDir({ 'matematika.gatra': MATEMATIKA_SRC }, (dir) => {
+    const importer = path.join(dir, 'utama.gatra');
+    tc('impor { Tambah } dari "./matematika"\ncetak(Tambah(10, 20))', { filePath: importer });
+  });
+});
+
+run('typechecker: named import of an internal (lowercase) identifier throws GALAT AKSES', () => {
+  withModuleDir({ 'matematika.gatra': MATEMATIKA_SRC }, (dir) => {
+    const importer = path.join(dir, 'utama.gatra');
+    assertThrows(
+      () => tc('impor { validasi } dari "./matematika"', { filePath: importer }),
+      '`validasi` tidak dapat diakses dari modul ini.'
+    );
+    try {
+      tc('impor { validasi } dari "./matematika"', { filePath: importer });
+    } catch (err) {
+      assertEqual(err.name, 'GALAT AKSES');
+      assert(err.message.includes('Identifier dengan huruf awal kecil bersifat internal.'), err.message);
+    }
+  });
+});
+
+run('typechecker: named import of a nonexistent identifier throws a clear error', () => {
+  withModuleDir({ 'matematika.gatra': MATEMATIKA_SRC }, (dir) => {
+    const importer = path.join(dir, 'utama.gatra');
+    assertThrows(
+      () => tc('impor { TidakAda } dari "./matematika"', { filePath: importer }),
+      "'TidakAda'"
+    );
+  });
+});
+
+run('typechecker: named import from a nonexistent module throws', () => {
+  withModuleDir({ 'matematika.gatra': MATEMATIKA_SRC }, (dir) => {
+    const importer = path.join(dir, 'utama.gatra');
+    assertThrows(() => tc('impor { Tambah } dari "./tidakada"', { filePath: importer }));
+  });
+});
+
+run('typechecker: namespace-style access to an internal identifier also throws GALAT AKSES', () => {
+  withModuleDir({ 'matematika.gatra': MATEMATIKA_SRC }, (dir) => {
+    const importer = path.join(dir, 'utama.gatra');
+    assertThrows(
+      () => tc('impor mat dari "./matematika"\ncetak(mat.validasi(10))', { filePath: importer }),
+      '`validasi` tidak dapat diakses dari modul ini.'
+    );
+  });
+});
+
+run('typechecker: namespace-style access to a public identifier is fine', () => {
+  withModuleDir({ 'matematika.gatra': MATEMATIKA_SRC }, (dir) => {
+    const importer = path.join(dir, 'utama.gatra');
+    tc('impor mat dari "./matematika"\ncetak(mat.Tambah(1, 2))', { filePath: importer });
+  });
+});
+
+run('typechecker: without a real filePath, local named imports fall back to lax/untyped (no crash)', () => {
+  // Same lenient behavior as the pre-existing namespace import — resolving a
+  // relative path needs a real file location, which isn't available when
+  // checking an in-memory snippet.
+  tc('impor { Apapun } dari "./tidak-ada-secara-nyata"');
+});
+
+run('typechecker: named import of an external (non-relative) package stays untyped/lax', () => {
+  tc('impor { readFileSync } dari "fs"\nreadFileSync("x")');
+});
+
+run('executes end-to-end: Tambah(10, 20) works, validasi(10) is rejected at compile time', () => {
+  withModuleDir({ 'matematika.gatra': MATEMATIKA_SRC }, (dir) => {
+    const cliPath = path.resolve(__dirname, '../src/cli/gatra.js');
+
+    // Runtime dependency resolution (runEsm) needs the '.gatra' extension in
+    // the import source to recognize it as a local Gatra module to compile —
+    // same convention the existing namespace-import examples already use.
+    // The typechecker's compile-time access check (tested above) supports
+    // the extension-less form too.
+    const okFile = path.join(dir, 'ok.gatra');
+    fs.writeFileSync(okFile, 'impor { Tambah } dari "./matematika.gatra"\ncetak(Tambah(10, 20))', 'utf8');
+    const okResult = spawnSync(process.execPath, [cliPath, 'jalankan', okFile], { encoding: 'utf8' });
+    assertEqual(okResult.status, 0, okResult.stderr);
+    assertEqual(okResult.stdout.trim(), '30');
+
+    const badFile = path.join(dir, 'bad.gatra');
+    fs.writeFileSync(badFile, 'impor { validasi } dari "./matematika.gatra"\ncetak(validasi(10))', 'utf8');
+    const badResult = spawnSync(process.execPath, [cliPath, 'jalankan', badFile], { encoding: 'utf8' });
+    assert(badResult.status !== 0);
+    assert(badResult.stderr.includes('GALAT AKSES'), badResult.stderr);
+    assert(badResult.stderr.includes('tidak dapat diakses dari modul ini'), badResult.stderr);
+  });
 });
 
 // ── Summary ───────────────────────────────────────────────────────────────────

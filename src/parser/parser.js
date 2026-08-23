@@ -136,6 +136,7 @@ class Parser {
           break; // anonymous → falls through to exprStmt
         }
         case 'struct':  return this.structDecl();
+        case 'class':   return this.classDecl();
         case 'if':      return this.ifStmt();
         case 'for':     return this.forStmt();
         case 'while':   return this.whileStmt();
@@ -144,7 +145,6 @@ class Parser {
         case 'print':   return this.printStmt();
         case 'package': return this.packageDecl();
         case 'import':  return this.packageImport();
-        case 'export':  return this.exportDecl();
         case 'type':    return this.typeAliasDecl();
         case 'break':   return this.breakStmt();
         case 'continue':return this.continueStmt();
@@ -310,6 +310,96 @@ class Parser {
     return { type: N.STRUCT_DECL, name, fields, line: tok.line, col: tok.col };
   }
 
+  // kelas Nama [warisi Induk] { field/konstruk/method/ambil/atur, [statis] [privat] ... }
+  classDecl() {
+    const tok  = this.consume(T.KEYWORD, 'class');
+    const name = this.consume(T.IDENTIFIER, undefined, 'Expected class name').value;
+
+    let superclass = null;
+    if (this.check(T.KEYWORD, 'extends')) {
+      this.advance();
+      superclass = this.consume(T.IDENTIFIER, undefined, "Expected parent class name after 'warisi'").value;
+    }
+
+    this.consume(T.LBRACE, undefined, "Expected '{' after class name");
+
+    const members = [];
+    while (!this.check(T.RBRACE) && !this.isAtEnd()) {
+      let isStatic = false;
+      if (this.check(T.KEYWORD, 'static')) { this.advance(); isStatic = true; }
+      let isPrivate = false;
+      if (this.check(T.KEYWORD, 'private')) { this.advance(); isPrivate = true; }
+
+      if (this.check(T.KEYWORD, 'constructor')) {
+        const cTok = this.advance();
+        this.consume(T.LPAREN, undefined, "Expected '(' after 'konstruk'");
+        const params = this.paramList();
+        this.consume(T.RPAREN, undefined, "Expected ')' after parameters");
+        const body = this.block();
+        members.push({ kind: 'constructor', params, body, line: cTok.line, col: cTok.col });
+        continue;
+      }
+
+      // 'ambil'/'atur' bukan keyword reserved (kata umum) — dikenali dari
+      // dua IDENTIFIER berturut-turut ('ambil namaGetter(' vs method biasa
+      // 'namaMethod('). Tanpa lookahead ini, field/method yang kebetulan
+      // bernama 'ambil'/'atur' akan salah dibaca sebagai getter/setter.
+      if (this.check(T.IDENTIFIER, 'ambil') && this.tokens[this.pos + 1]?.type === T.IDENTIFIER) {
+        const gTok = this.advance();
+        const mName = this.consume(T.IDENTIFIER, undefined, "Expected getter name after 'ambil'").value;
+        this.consume(T.LPAREN, undefined, "Expected '(' after getter name");
+        this.consume(T.RPAREN, undefined, "Expected ')' — getters take no parameters");
+        let returnType = null;
+        if (this.matchToken(T.COLON)) returnType = this.consumeType('Expected getter return type');
+        const body = this.block();
+        members.push({ kind: 'getter', name: mName, returnType, body, isStatic, line: gTok.line, col: gTok.col });
+        continue;
+      }
+
+      if (this.check(T.IDENTIFIER, 'atur') && this.tokens[this.pos + 1]?.type === T.IDENTIFIER) {
+        const sTok = this.advance();
+        const mName = this.consume(T.IDENTIFIER, undefined, "Expected setter name after 'atur'").value;
+        this.consume(T.LPAREN, undefined, "Expected '(' after setter name");
+        const paramName = this.consume(T.IDENTIFIER, undefined, 'Expected setter parameter name').value;
+        this.consume(T.COLON, undefined, "Expected ':' after setter parameter name");
+        const paramType = this.consumeType('Expected setter parameter type');
+        this.consume(T.RPAREN, undefined, "Expected ')' — setters take exactly one parameter");
+        const body = this.block();
+        members.push({ kind: 'setter', name: mName, paramName, paramType, body, isStatic, line: sTok.line, col: sTok.col });
+        continue;
+      }
+
+      let isAsync = false;
+      if (this.check(T.KEYWORD, 'async')) { this.advance(); isAsync = true; }
+
+      const memberTok  = this.consume(T.IDENTIFIER, undefined, 'Expected field or method name');
+      const memberName = memberTok.value;
+
+      if (this.check(T.LPAREN)) {
+        // Method
+        this.advance();
+        const params = this.paramList();
+        this.consume(T.RPAREN, undefined, "Expected ')' after parameters");
+        let returnType = null;
+        if (this.matchToken(T.COLON)) returnType = this.consumeType('Expected method return type');
+        const body = this.block();
+        members.push({ kind: 'method', name: memberName, params, returnType, body, isStatic, isPrivate, isAsync, line: memberTok.line, col: memberTok.col });
+      } else {
+        // Field
+        this.consume(T.COLON, undefined, "Expected ':' after field name");
+        const fieldType = this.consumeType('Expected field type');
+        let defaultVal = null;
+        if (this.matchToken(T.EQUALS)) defaultVal = this.expression();
+        members.push({ kind: 'field', name: memberName, type: fieldType, default: defaultVal, isStatic, isPrivate, line: memberTok.line, col: memberTok.col });
+      }
+
+      this.matchToken(T.COMMA);
+    }
+
+    this.consume(T.RBRACE, undefined, "Expected '}' after class body");
+    return { type: N.CLASS_DECL, name, superclass, members, line: tok.line, col: tok.col };
+  }
+
   ifStmt() {
     const tok  = this.consume(T.KEYWORD, 'if');
     const prev = this.allowStructInit;
@@ -393,17 +483,6 @@ class Parser {
     this.consume(T.EQUALS, undefined, "Expected '=' after type name");
     const target = this.consumeType("Expected underlying type after '='");
     return { type: N.TYPE_ALIAS_DECL, name, target, line: tok.line, col: tok.col };
-  }
-
-  exportDecl() {
-    const tok = this.consume(T.KEYWORD, 'export');
-    if (!this.check(T.KEYWORD, 'fn')) {
-      const t = this.peek();
-      throw new ParseError("'ekspor' hanya berlaku untuk 'fungsi'", t.line, t.col);
-    }
-    const fn = this.fnDecl();
-    fn.isExported = true;
-    return fn;
   }
 
   testDecl() {
@@ -601,11 +680,25 @@ class Parser {
   }
 
   packageImport() {
-    const tok       = this.consume(T.KEYWORD, 'import');
+    const tok = this.consume(T.KEYWORD, 'import');
+
+    // impor { Nama1, Nama2 } dari "path" — named import (Go-style visibility)
+    if (this.check(T.LBRACE)) {
+      this.advance();
+      const names = [];
+      do {
+        names.push(this.consume(T.IDENTIFIER, undefined, "Expected identifier in import list").value);
+      } while (this.matchToken(T.COMMA));
+      this.consume(T.RBRACE, undefined, "Expected '}' after import list");
+      this.consume(T.KEYWORD, 'from', "Expected 'dari' after import list");
+      const source = this.consume(T.STRING, undefined, "Expected source string after 'dari'").value;
+      return { type: N.PACKAGE_IMPORT, localName: null, names, source, line: tok.line, col: tok.col };
+    }
+
     const localName = this.consume(T.IDENTIFIER, undefined, "Expected import name after 'impor'").value;
     this.consume(T.KEYWORD, 'from', "Expected 'dari' after import name");
     const source    = this.consume(T.STRING, undefined, "Expected source string after 'dari'").value;
-    return { type: N.PACKAGE_IMPORT, localName, source, line: tok.line, col: tok.col };
+    return { type: N.PACKAGE_IMPORT, localName, names: null, source, line: tok.line, col: tok.col };
   }
 
   exprStmt() {
@@ -790,6 +883,14 @@ class Parser {
     return this.callExpr();
   }
 
+  // Member names are normally identifiers, but 'konstruk' (KEYWORD 'constructor')
+  // must also be accepted here so 'induk.konstruk(...)' (super constructor call)
+  // can be written.
+  consumeMemberName(message) {
+    if (this.check(T.KEYWORD, 'constructor')) { this.advance(); return 'konstruk'; }
+    return this.consume(T.IDENTIFIER, undefined, message).value;
+  }
+
   callExpr() {
     let expr = this.primary();
 
@@ -801,11 +902,11 @@ class Parser {
         expr = { type: N.CALL_EXPR, callee: expr, args, line: tok.line, col: tok.col };
       } else if (this.check(T.DOT)) {
         const tok    = this.advance();
-        const member = this.consume(T.IDENTIFIER, undefined, 'Expected member name after .').value;
+        const member = this.consumeMemberName('Expected member name after .');
         expr = { type: N.MEMBER_EXPR, object: expr, member, optional: false, line: tok.line, col: tok.col };
       } else if (this.check(T.QDOT)) {
         const tok    = this.advance();
-        const member = this.consume(T.IDENTIFIER, undefined, "Expected member name after '?.'").value;
+        const member = this.consumeMemberName("Expected member name after '?.'");
         expr = { type: N.MEMBER_EXPR, object: expr, member, optional: true, line: tok.line, col: tok.col };
       } else if (this.check(T.LBRACKET)) {
         const tok   = this.advance();
@@ -912,6 +1013,16 @@ class Parser {
     if (tok.type === T.KEYWORD && tok.value === 'null') {
       this.advance();
       return { type: N.NULL_LITERAL, line: tok.line, col: tok.col };
+    }
+
+    // ini (this) / induk (super)
+    if (tok.type === T.KEYWORD && tok.value === 'this') {
+      this.advance();
+      return { type: N.THIS_EXPR, line: tok.line, col: tok.col };
+    }
+    if (tok.type === T.KEYWORD && tok.value === 'super') {
+      this.advance();
+      return { type: N.SUPER_EXPR, line: tok.line, col: tok.col };
     }
 
     // Anonymous function expression: fungsi(params) { body }

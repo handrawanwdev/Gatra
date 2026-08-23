@@ -1,0 +1,30 @@
+// 26_visibility.gatra — Visibility identifier gaya Go
+//
+// Aturan:
+//   - Huruf awal BESAR pada nama fungsi/struktur/kelas/variabel level modul
+//     = publik/terekspor (bisa diimpor modul lain).
+//   - Huruf awal kecil = internal/tidak terekspor.
+//   - Tidak ada keyword public/private/export khusus — murni dari huruf awal.
+//
+// 'impor { Nama } dari "path"' mengimpor identifier tertentu secara langsung
+// (bukan lewat namespace). Compiler memvalidasi visibility saat kompilasi.
+
+impor { Tambah } dari "./26_visibility_modul.gatra"
+
+cetak(Tambah(10, 20))
+
+// Baris berikut GAGAL dikompilasi kalau di-uncomment, karena 'validasi'
+// huruf awalnya kecil (internal) di 26_visibility_modul.gatra:
+//
+//   impor { validasi } dari "./26_visibility_modul.gatra"
+//
+// Error yang dihasilkan:
+//
+//   GALAT AKSES
+//   `validasi` tidak dapat diakses dari modul ini.
+//   Identifier dengan huruf awal kecil bersifat internal.
+
+// Bentuk namespace ('impor ns dari "path"') juga menegakkan aturan yang sama:
+impor modul dari "./26_visibility_modul.gatra"
+cetak(modul.Tambah(1, 2))
+// modul.validasi(10) — juga GALAT AKSES kalau dipanggil

@@ -1,0 +1,13 @@
+// 26_visibility_modul.gatra — modul contoh untuk visibility gaya Go
+//
+// Tidak butuh 'paket' agar bisa diimpor — 'gatra jalankan' pada modul lain
+// yang mengimpornya akan mengompilasi file ini dan meng-export identifier
+// publiknya secara otomatis.
+
+fungsi Tambah(a: angka, b: angka): angka {
+  balik a + b
+}
+
+fungsi validasi(a: angka): logika {
+  balik a > 0
+}

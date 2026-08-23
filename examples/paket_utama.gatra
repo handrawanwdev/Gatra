@@ -3,16 +3,16 @@
 impor mat dari "./paket_matematika.gatra"
 
 fungsi mulai(): tiada {
-  isi jumlah = mat.tambah(10, 5)
+  isi jumlah = mat.Tambah(10, 5)
   cetak(jumlah)
 
-  isi selisih = mat.kurang(20, 8)
+  isi selisih = mat.Kurang(20, 8)
   cetak(selisih)
 
-  isi hasil_kali = mat.kali(4, 6)
+  isi hasil_kali = mat.Kali(4, 6)
   cetak(hasil_kali)
 
-  isi kuadrat = mat.kuadrat(7)
+  isi kuadrat = mat.Kuadrat(7)
   cetak(kuadrat)
 }
 
