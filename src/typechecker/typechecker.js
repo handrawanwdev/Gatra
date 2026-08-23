@@ -4,16 +4,29 @@ const { NodeType: N } = require('../ast/nodes');
 const { SymbolTable }  = require('./symbol-table');
 const { makeErrors }   = require('./type-errors');
 
+// Tipe numerik: 'number' (angka, generik) mencakup 'int' (bilangan), 'float'
+// (pecahan), dan 'byte'. 'numeric' pada pairs berarti "salah satu dari ini".
+const NUMERIC_TYPES = new Set(['number', 'int', 'float', 'byte']);
+
+// Hasil promosi dua operand numerik: generik ('number') menang paling luas,
+// lalu 'float' > 'int' > 'byte'.
+function promoteNumeric(a, b) {
+  if (a === 'number' || b === 'number') return 'number';
+  if (a === 'float'  || b === 'float')  return 'float';
+  if (a === 'int'    || b === 'int')    return 'int';
+  return 'byte';
+}
+
 // Which type pairs are valid for each binary operator, and what type they produce
 const OPERATOR_RULES = {
-  '+':  { pairs: [['number','number'],['string','string']], result: (l) => l },
-  '-':  { pairs: [['number','number']], result: () => 'number' },
-  '*':  { pairs: [['number','number']], result: () => 'number' },
-  '/':  { pairs: [['number','number']], result: () => 'number' },
-  '>':  { pairs: [['number','number']], result: () => 'bool' },
-  '<':  { pairs: [['number','number']], result: () => 'bool' },
-  '>=': { pairs: [['number','number']], result: () => 'bool' },
-  '<=': { pairs: [['number','number']], result: () => 'bool' },
+  '+':  { pairs: [['numeric','numeric'],['string','string']], result: (l, r) => l === 'string' ? l : promoteNumeric(l, r) },
+  '-':  { pairs: [['numeric','numeric']], result: promoteNumeric },
+  '*':  { pairs: [['numeric','numeric']], result: promoteNumeric },
+  '/':  { pairs: [['numeric','numeric']], result: promoteNumeric },
+  '>':  { pairs: [['numeric','numeric']], result: () => 'bool' },
+  '<':  { pairs: [['numeric','numeric']], result: () => 'bool' },
+  '>=': { pairs: [['numeric','numeric']], result: () => 'bool' },
+  '<=': { pairs: [['numeric','numeric']], result: () => 'bool' },
   '==': { pairs: 'same', result: () => 'bool' },
   '!=': { pairs: 'same', result: () => 'bool' },
   '&&': { pairs: [['bool','bool']], result: () => 'bool' },
@@ -27,19 +40,20 @@ class TypeChecker {
     this.symbols    = new SymbolTable();
     this.currentFn  = null; // { name, returnType } of the fn being checked
     this.typeAliases = {}; // name → canonical target type (from 'tipe' declarations)
+    this.withStack   = []; // active 'dengan'/'ubah' source vars — bare identifiers inside their fields resolve as member access, not a normal lookup
 
     // Built-in functions registered in the global scope
     this.symbols.define('__print__', {
       kind: 'fn', name: '__print__',
       params: [], returnType: 'void', variadic: true,
     });
-    // kunci() / saluran() — concurrency primitives (pustaka/sinkronisasi runtime).
-    // Marked 'builtin' so user code may shadow them: isi kunci = kunci()
-    this.symbols.define('kunci', {
-      kind: 'fn', name: 'kunci', params: [], returnType: 'unknown', variadic: true, builtin: true,
+    // berhasil(v) / gagal(e) — konstruktor hasil<T,E>. 'builtin' supaya tetap
+    // bisa di-shadow oleh deklarasi pengguna (konsisten dgn builtin lain).
+    this.symbols.define('berhasil', {
+      kind: 'fn', name: 'berhasil', params: [], returnType: 'unknown', variadic: true, builtin: true,
     });
-    this.symbols.define('saluran', {
-      kind: 'fn', name: 'saluran', params: [], returnType: 'unknown', variadic: true, builtin: true,
+    this.symbols.define('gagal', {
+      kind: 'fn', name: 'gagal', params: [], returnType: 'unknown', variadic: true, builtin: true,
     });
   }
 
@@ -77,11 +91,11 @@ class TypeChecker {
       case N.CONTINUE_STMT:  return;
       case N.TYPE_ALIAS_DECL: return this.checkTypeAliasDecl(node);
       case N.MATCH_STMT:     return this.checkMatchStmt(node);
+      case N.MATCH_RESULT_STMT: return this.checkMatchResultStmt(node);
       case N.TEST_DECL:      return this.checkTestDecl(node);
       case N.ASSERT_STMT:    return this.checkAssertStmt(node);
-      case N.TASK_STMT:      return this.checkTaskStmt(node);
-      case N.STRUCTURED_SPAWN: return this.checkStructuredSpawn(node);
-      case N.SELECT_STMT:    return this.checkSelectStmt(node);
+      case N.MEASURE_STMT:   return this.checkMeasureStmt(node);
+      case N.JS_BLOCK_STMT:  return; // raw escape hatch — not type-checked
       default:
         throw new Error(`TypeChecker: unhandled statement '${node.type}'`);
     }
@@ -111,33 +125,30 @@ class TypeChecker {
     }
   }
 
-  checkTaskStmt(node) {
-    this.inferExpr(node.expr);
-  }
-
-  checkStructuredSpawn(node) {
-    if (!this.currentFn) {
-      throw this.err.awaitOutsideAsync(node.line, node.col);
-    }
-    if (!this.currentFn.isAsync) {
-      throw this.err.awaitInNonAsync(this.currentFn.name, node.line, node.col);
-    }
+  checkMeasureStmt(node) {
+    // Berjalan inline di konteks yang mengelilinginya — 'tunggu' di dalamnya
+    // tetap butuh fungsi asinkron seperti biasa, tidak dipaksa async di sini.
     this.symbols.push();
     for (const s of node.body.body) this.checkStmt(s);
     this.symbols.pop();
   }
 
-  checkSelectStmt(node) {
-    if (!this.currentFn) {
-      throw this.err.awaitOutsideAsync(node.line, node.col);
-    }
-    if (!this.currentFn.isAsync) {
-      throw this.err.awaitInNonAsync(this.currentFn.name, node.line, node.col);
-    }
-    for (const c of node.cases) {
-      this.inferExpr(c.channel);
+  checkMatchResultStmt(node) {
+    this.inferExpr(node.discriminant);
+    if (node.okArm) {
       this.symbols.push();
-      this.checkStmt(c.body);
+      this.symbols.define(node.okArm.binding, {
+        kind: 'var', type: 'unknown', mutable: false, line: node.line, col: node.col,
+      });
+      this.checkStmt(node.okArm.body);
+      this.symbols.pop();
+    }
+    if (node.errArm) {
+      this.symbols.push();
+      this.symbols.define(node.errArm.binding, {
+        kind: 'var', type: 'unknown', mutable: false, line: node.line, col: node.col,
+      });
+      this.checkStmt(node.errArm.body);
       this.symbols.pop();
     }
   }
@@ -185,6 +196,7 @@ class TypeChecker {
       if (!this.compatible(node.varType, valueType)) {
         throw this.err.typeMismatch(node.varType, valueType, node.value.line, node.value.col);
       }
+      this.checkNumericLiteralFits(node.varType, node.value);
     }
 
     const resolvedType = node.varType || valueType;
@@ -229,7 +241,6 @@ class TypeChecker {
     this.symbols.define(node.name, {
       kind: 'fn', name: node.name,
       params: node.params, returnType,
-      isWorker: node.isWorker || false,
       line: node.line, col: node.col,
     });
 
@@ -238,7 +249,10 @@ class TypeChecker {
 
     this.symbols.push();
     for (const p of node.params) {
-      if (p.default) this.inferExpr(p.default);
+      if (p.default) {
+        this.inferExpr(p.default);
+        this.checkNumericLiteralFits(p.type, p.default);
+      }
       this.symbols.define(p.name, {
         kind: 'var', type: p.type, mutable: false,
         line: node.line, col: node.col,
@@ -287,10 +301,10 @@ class TypeChecker {
     if (node.loopType === 'range') {
       const startType = this.inferExpr(node.start);
       const endType   = this.inferExpr(node.end);
-      if (startType !== 'number' && startType !== 'unknown') {
+      if (!NUMERIC_TYPES.has(startType) && startType !== 'unknown') {
         throw this.err.typeMismatch('number', startType, node.start.line, node.start.col);
       }
-      if (endType !== 'number' && endType !== 'unknown') {
+      if (!NUMERIC_TYPES.has(endType) && endType !== 'unknown') {
         throw this.err.typeMismatch('number', endType, node.end.line, node.end.col);
       }
       this.symbols.define(node.iter, {
@@ -354,6 +368,7 @@ class TypeChecker {
           node.value.line, node.value.col,
         );
       }
+      this.checkNumericLiteralFits(this.currentFn.returnType, node.value);
     }
   }
 
@@ -365,7 +380,7 @@ class TypeChecker {
 
   inferExpr(node) {
     const t = this._inferExpr(node);
-    node._type = t; // annotate for ownership checker
+    node._type = t;
     return t;
   }
 
@@ -379,19 +394,18 @@ class TypeChecker {
       case N.UNARY_EXPR:     return this.inferUnaryExpr(node);
       case N.CALL_EXPR:      return this.inferCallExpr(node);
       case N.MEMBER_EXPR:    return this.inferMemberExpr(node);
+      case N.INDEX_EXPR:     return this.inferIndexExpr(node);
       case N.STRUCT_INIT:    return this.inferStructInit(node);
       case N.ASSIGN_EXPR:    return this.inferAssignExpr(node);
-      case N.BORROW_EXPR:    return this.inferBorrowExpr(node);
-      case N.DEREF_EXPR:     return this.inferDerefExpr(node);
       case N.ARRAY_LITERAL:  return this.inferArrayLiteral(node);
       case N.AWAIT_EXPR:     return this.inferAwaitExpr(node);
       case N.FUNC_EXPR:      return this.inferFuncExpr(node);
       case N.NULL_LITERAL:   return 'null';
       case N.OBJECT_LITERAL: return this.inferObjectLiteral(node);
+      case N.OBJECT_TRANSFORM_EXPR: return this.inferObjectTransformExpr(node);
       case N.TEMPLATE_EXPR:  return this.inferTemplateExpr(node);
       case N.SPREAD_ELEMENT: this.inferExpr(node.value); return 'unknown';
       case N.TERNARY_EXPR:   return this.inferTernaryExpr(node);
-      case N.SPAWN_EXPR:     return this.inferSpawnExpr(node);
       default:
         return 'unknown';
     }
@@ -416,26 +430,12 @@ class TypeChecker {
     return ct === at ? ct : 'unknown';
   }
 
-  inferBorrowExpr(node) {
-    const info = this.symbols.lookup(node.target);
-    if (!info) throw this.err.undefinedVar(node.target, node.line, node.col);
-    const inner = info.kind === 'var' ? info.type : 'unknown';
-    // type is '&T' or '&mut T'
-    return node.mutable ? `&mut ${inner}` : `&${inner}`;
-  }
-
-  inferDerefExpr(node) {
-    const info = this.symbols.lookup(node.ref);
-    if (!info) throw this.err.undefinedVar(node.ref, node.line, node.col);
-    const t = info.kind === 'var' ? info.type : 'unknown';
-    // strip & or &mut  prefix
-    if (t.startsWith('&mut ')) return t.slice(5);
-    if (t.startsWith('&'))     return t.slice(1);
-    // deref of a non-ref — type checker will catch this in ownership checker
-    return t;
-  }
-
   inferIdentifier(node) {
+    // Inside a 'dengan'/'ubah' field, a bare identifier always resolves as a
+    // member of the with-source (codegen rewrites it to source.name) — it
+    // never falls back to an outer variable, so we can't know its type here.
+    if (this.withStack.length > 0) return 'unknown';
+
     const info = this.symbols.lookup(node.name);
     if (!info) throw this.err.undefinedVar(node.name, node.line, node.col);
     if (info.kind === 'var')     return info.type;
@@ -444,9 +444,29 @@ class TypeChecker {
     return 'unknown';
   }
 
+  inferObjectTransformExpr(node) {
+    this.inferExpr(node.source);
+    this.withStack.push(true);
+    for (const f of node.fields) this.inferExpr(f.value);
+    this.withStack.pop();
+    return 'unknown';
+  }
+
   inferBinaryExpr(node) {
     const lt   = this.inferExpr(node.left);
     const rt   = this.inferExpr(node.right);
+
+    // Nullish coalescing (a ?? b): hasil = tipe a tanpa '?' jika kompatibel
+    // dengan b, jika tidak melebar ke 'apa_saja' — tidak dimodelkan lewat
+    // OPERATOR_RULES karena hasilnya bergantung pada penghapusan sufiks '?'.
+    if (node.op === '??') {
+      if (lt.endsWith('?')) {
+        const inner = lt.slice(0, -1);
+        return this.compatible(inner, rt) ? inner : 'unknown';
+      }
+      return lt === 'unknown' ? rt : lt;
+    }
+
     const rule = OPERATOR_RULES[node.op];
 
     if (!rule) return 'unknown';
@@ -458,9 +478,12 @@ class TypeChecker {
       return 'bool';
     }
 
-    const ok = rule.pairs.some(([l, r]) =>
-      (l === lt || lt === 'unknown') && (r === rt || rt === 'unknown')
-    );
+    const matches = (want, got) => {
+      if (got === 'unknown') return true;
+      if (want === 'numeric') return NUMERIC_TYPES.has(got);
+      return want === got;
+    };
+    const ok = rule.pairs.some(([l, r]) => matches(l, lt) && matches(r, rt));
 
     if (!ok && lt !== 'unknown' && rt !== 'unknown') {
       throw this.err.operatorMismatch(node.op, lt, rt, node.line, node.col);
@@ -472,10 +495,12 @@ class TypeChecker {
   inferUnaryExpr(node) {
     const t = this.inferExpr(node.operand);
     if (node.op === '-') {
-      if (t !== 'number' && t !== 'unknown') {
+      if (!NUMERIC_TYPES.has(t) && t !== 'unknown') {
         throw this.err.typeMismatch('number', t, node.operand.line, node.operand.col);
       }
-      return 'number';
+      // Negasi selalu melebar ke 'angka' generik — hasilnya bisa keluar dari
+      // rentang 'byte'/'bilangan' asalnya (mis. -x saat x: byte).
+      return t === 'unknown' ? 'unknown' : 'number';
     }
     if (node.op === '!') {
       if (t !== 'bool' && t !== 'unknown') {
@@ -536,6 +561,17 @@ class TypeChecker {
       return info.returnType;
     }
 
+    // Rest parameter (...nama): any number of trailing args is fine
+    const restParam = info.params[info.params.length - 1];
+    if (restParam && restParam.rest) {
+      const required = info.params.slice(0, -1).filter(p => !p.default).length;
+      if (args.length < required) {
+        throw this.err.wrongArgCount(name, required, args.length, node.line, node.col);
+      }
+      for (const a of args) this.inferExpr(a);
+      return info.returnType;
+    }
+
     if (args.length !== info.params.length) {
       // Allow calling with fewer args when params have defaults
       const required = info.params.filter(p => !p.default).length;
@@ -550,6 +586,7 @@ class TypeChecker {
       if (!this.compatible(paramType, argType)) {
         throw this.err.wrongArgType(name, i, paramType, argType, args[i].line, args[i].col);
       }
+      this.checkNumericLiteralFits(paramType, args[i]);
     }
 
     return info.returnType;
@@ -571,10 +608,24 @@ class TypeChecker {
     return field.type;
   }
 
+  inferIndexExpr(node) {
+    const objType = this.inferExpr(node.object);
+    this.inferExpr(node.index);
+    // Larik bertipe (T[]) memberi tipe elemen; selebihnya (objek/peta/apa_saja)
+    // adalah computed property access dinamis — hasil tidak diketahui statis.
+    if (objType.endsWith('[]')) return objType.slice(0, -2);
+    return 'unknown';
+  }
+
   inferFuncExpr(node) {
     const returnType = node.returnType || 'void';
     const prevFn     = this.currentFn;
     this.currentFn   = { name: '<anonim>', returnType, isAsync: node.isAsync || false };
+
+    // A nested function/arrow has its own scope — its params/body must not
+    // resolve bare identifiers against an enclosing 'dengan'/'ubah' source.
+    const prevWithStack = this.withStack;
+    this.withStack = [];
 
     this.symbols.push();
     for (const p of node.params) {
@@ -583,22 +634,16 @@ class TypeChecker {
         line: node.line, col: node.col,
       });
     }
-    for (const s of node.body.body) this.checkStmt(s);
+    if (node.isArrow && node.exprBody) {
+      this.inferExpr(node.exprBody);
+    } else {
+      for (const s of node.body.body) this.checkStmt(s);
+    }
     this.symbols.pop();
 
+    this.withStack = prevWithStack;
     this.currentFn = prevFn;
     return 'fn';
-  }
-
-  inferSpawnExpr(node) {
-    const callee = node.call.callee;
-    if (typeof callee === 'object' && callee.type === N.IDENTIFIER) {
-      const info = this.symbols.lookup(callee.name);
-      if (info && info.kind === 'fn' && !info.isWorker) {
-        throw this.err.notAWorkerFn(callee.name, node.line, node.col);
-      }
-    }
-    return this.inferExpr(node.call);
   }
 
   inferAwaitExpr(node) {
@@ -646,6 +691,7 @@ class TypeChecker {
       if (!this.compatible(def.type, valType)) {
         throw this.err.typeMismatch(def.type, valType, initField.value.line, initField.value.col);
       }
+      this.checkNumericLiteralFits(def.type, initField.value);
     }
 
     // Check missing required fields
@@ -668,17 +714,7 @@ class TypeChecker {
       if (info.kind === 'var' && !this.compatible(info.type, valueType)) {
         throw this.err.typeMismatch(info.type, valueType, node.value.line, node.value.col);
       }
-    }
-
-    if (node.target.type === N.DEREF_EXPR) {
-      const refInfo = this.symbols.lookup(node.target.ref);
-      if (refInfo && refInfo.kind === 'var') {
-        // Deref type should be &mut T — ownership checker enforces mutability
-        const inner = this.inferDerefExpr(node.target);
-        if (!this.compatible(inner, valueType)) {
-          throw this.err.typeMismatch(inner, valueType, node.value.line, node.value.col);
-        }
-      }
+      if (info.kind === 'var') this.checkNumericLiteralFits(info.type, node.value);
     }
 
     return valueType;
@@ -705,7 +741,46 @@ class TypeChecker {
     if (a === b) return true;
     if (a.endsWith('?') && a.slice(0, -1) === b) return true;
     if (b.endsWith('?') && b.slice(0, -1) === a) return true;
+    if (NUMERIC_TYPES.has(a) && NUMERIC_TYPES.has(b)) return this.numericCompatible(a, b);
     return false;
+  }
+
+  // target=a menerima value=b? 'angka' generik menerima/diterima semua
+  // refinement numerik (bilangan/pecahan/byte). 'pecahan' menerima
+  // 'bilangan'/'byte' (melebar). 'bilangan' menerima 'byte' (melebar).
+  // Penyempitan (mis. pecahan → bilangan, angka → byte) TIDAK boleh implisit
+  // lewat variabel — hanya literal langsung yang divalidasi (lihat
+  // checkNumericLiteralFits), supaya kesalahan seperti 'byte = 256' ketahuan.
+  numericCompatible(target, value) {
+    if (target === 'number' || value === 'number') return true;
+    if (target === 'float') return true; // pecahan menerima int/byte/float
+    if (target === 'int') return value === 'int' || value === 'byte';
+    if (target === 'byte') return value === 'byte';
+    return false;
+  }
+
+  // Validasi nilai literal angka langsung terhadap batas tipe target —
+  // hanya bisa dilakukan saat nilainya diketahui statis (literal), bukan
+  // ekspresi/variabel sembarang (itu di luar jangkauan type checker ringan ini).
+  checkNumericLiteralFits(targetType, valueNode) {
+    if (!valueNode) return;
+    let literalNode = valueNode;
+    let sign = 1;
+    // Unwrap a leading unary minus so '-1' is checked as the literal -1, not +1
+    if (literalNode.type === N.UNARY_EXPR && literalNode.op === '-' &&
+        literalNode.operand.type === N.NUMBER_LITERAL) {
+      literalNode = literalNode.operand;
+      sign = -1;
+    }
+    if (literalNode.type !== N.NUMBER_LITERAL) return;
+    const t = this.resolveType(targetType);
+    const v = sign * literalNode.value;
+    if (t === 'int' && !Number.isInteger(v)) {
+      throw this.err.invalidNumericLiteral('bilangan', v, valueNode.line, valueNode.col);
+    }
+    if (t === 'byte' && (!Number.isInteger(v) || v < 0 || v > 255)) {
+      throw this.err.invalidNumericLiteral('byte', v, valueNode.line, valueNode.col);
+    }
   }
 }
 

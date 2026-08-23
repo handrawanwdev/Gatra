@@ -1,12 +1,12 @@
-// 02_tipe_data.gatra — Sistem tipe: dasar, opsional, dan apapun
+// 02_tipe_data.gatra — Sistem tipe: dasar, opsional, dan apa_saja
 
 // Tipe dasar
 isi t1: teks = "halo"
-isi t2: angka = 42
-isi t3: bilangan = 10      // alias 'angka' (integer secara konsep)
-isi t4: pecahan = 3.14     // alias 'angka' (float secara konsep)
+isi t2: angka = 42          // generik — menerima bilangan, pecahan, byte
+isi t3: bilangan = 10       // harus bilangan bulat — 'bilangan = 3.14' GALAT saat kompilasi
+isi t4: pecahan = 3.14      // boleh bulat maupun desimal
 isi t5: logika = benar
-isi t6: byte = 255         // alias 'angka'
+isi t6: byte = 255          // bilangan bulat 0-255 — 'byte = 256' GALAT saat kompilasi
 
 cetak(t1)
 cetak(t2)
@@ -15,8 +15,8 @@ cetak(t4)
 cetak(t5)
 cetak(t6)
 
-// 'apapun' — escape hatch tanpa pemeriksaan tipe (dipakai untuk data dari luar)
-isi bebas: apapun = "boleh apa saja"
+// 'apa_saja' — escape hatch tanpa pemeriksaan tipe (dipakai untuk data dari luar)
+isi bebas: apa_saja = "boleh apa saja"
 cetak(bebas)
 
 // Opsional (T?) — cara aman merepresentasikan "mungkin tidak ada nilai".

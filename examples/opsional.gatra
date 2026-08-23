@@ -1,0 +1,21 @@
+// opsional.gatra — Nilai opsional (PRD bagian 15 versi lama / tipe T?)
+
+fungsi cariPengguna(id: angka): teks? {
+  jika (id == 1) {
+    balik "Handrawan"
+  }
+  balik kosong
+}
+
+isi nama = cariPengguna(1)
+jika (nama != kosong) {
+  cetak("Ditemukan:")
+  cetak(nama)
+} lain {
+  cetak("Pengguna tidak ditemukan")
+}
+
+isi tidakDitemukan = cariPengguna(99)
+jika (tidakDitemukan == kosong) {
+  cetak("Sesuai dugaan: tidak ditemukan")
+}

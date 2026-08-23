@@ -3,8 +3,6 @@
 const { tokenize }         = require('../src/lexer/lexer');
 const { parse }            = require('../src/parser/parser');
 const { typecheck }        = require('../src/typechecker/typechecker');
-const { ownershipCheck }   = require('../src/ownership/ownership-checker');
-const { irNormalize }      = require('../src/ir/ir-normalizer');
 const { generate }         = require('../src/codegen/codegen');
 const { TokenType }        = require('../src/lexer/tokens');
 const { detectGrammar }    = require('../src/lexer/keywords');
@@ -41,8 +39,6 @@ function compile(src, opts) {
   const grammar = detectGrammar(src);
   const ast     = parse(tokenize(src));
   typecheck(ast, grammar);
-  ownershipCheck(ast, grammar);
-  irNormalize(ast);
   return generate(ast, opts);
 }
 
@@ -50,13 +46,6 @@ function tc(src) {
   const grammar = detectGrammar(src);
   const ast     = parse(tokenize(src));
   typecheck(ast, grammar);
-}
-
-function oc(src) {
-  const grammar = detectGrammar(src);
-  const ast     = parse(tokenize(src));
-  typecheck(ast, grammar);
-  ownershipCheck(ast, grammar);
 }
 
 function exec(src) {
@@ -456,185 +445,6 @@ run('rejects struct field type mismatch (error in indonesian)', () => {
     () => tc('struktur Titik { x: angka } isi p = Titik { x: "salah" }'),
     'angka'
   );
-});
-
-// ── Ownership Tests ───────────────────────────────────────────────────────────
-
-console.log('\nOwnership');
-
-run('primitives use copy semantics — no move', () => {
-  oc('isi a = 10 isi b = a cetak(a) cetak(b)');
-});
-
-run('struct move: use-after-move detected', () => {
-  assertThrows(() => oc(`
-struktur Kotak { nilai: angka }
-isi a = Kotak { nilai: 1 }
-isi b = a
-cetak(a.nilai)
-`), 'sudah dipindahkan');
-});
-
-run('struct move: original invalid, new owner valid', () => {
-  oc(`
-struktur Kotak { nilai: angka }
-isi a = Kotak { nilai: 1 }
-isi b = a
-cetak(b.nilai)
-`);
-});
-
-run('move into function arg (struct)', () => {
-  assertThrows(() => oc(`
-struktur Kotak { nilai: angka }
-fungsi konsumsi(b: Kotak) { cetak(b.nilai) }
-isi x = Kotak { nilai: 5 }
-konsumsi(x)
-cetak(x.nilai)
-`), 'sudah dipindahkan');
-});
-
-run('mutation requires ubah declaration', () => {
-  assertThrows(() => oc('isi x = 10 x = 20'), 'belum dideklarasikan sebagai mutable');
-});
-
-run('ubah variable can be reassigned', () => {
-  const out = exec('isi ubah x = 10 x = 20 cetak(x)');
-  assertEqual(out[0], '20');
-});
-
-run('assignNonMutable error in indonesian', () => {
-  assertThrows(() => oc('isi x = 10 x = 20'), 'belum dideklarasikan sebagai mutable');
-});
-
-run('immutable borrow: multiple &x borrows allowed', () => {
-  oc(`
-isi x = 10
-isi r1 = &x
-isi r2 = &x
-cetak(*r1)
-cetak(*r2)
-`);
-});
-
-run('immutable borrow: cannot mutably borrow while immutably borrowed', () => {
-  assertThrows(() => oc(`
-isi ubah x = 10
-isi r1 = &x
-isi r2 = &ubah x
-`), 'Tidak bisa meminjam');
-});
-
-run('mutable borrow: only one &ubah allowed', () => {
-  assertThrows(() => oc(`
-isi ubah x = 10
-isi r1 = &ubah x
-isi r2 = &ubah x
-`), 'Tidak bisa meminjam');
-});
-
-run('mutable borrow requires ubah variable', () => {
-  assertThrows(() => oc(`
-isi x = 10
-isi r = &ubah x
-`), 'belum dideklarasikan sebagai mutable');
-});
-
-run('cannot move variable that is borrowed', () => {
-  assertThrows(() => oc(`
-struktur Kotak { nilai: angka }
-isi a = Kotak { nilai: 1 }
-isi r = &a
-isi b = a
-`), 'sedang dipinjam');
-});
-
-run('deref read: *r resolves to value', () => {
-  const out = exec('isi x = 42 isi r = &x cetak(*r)');
-  assertEqual(out[0], '42');
-});
-
-run('deref write: *r = value modifies original', () => {
-  const out = exec('isi ubah x = 10 isi r = &ubah x *r = 99 cetak(x)');
-  assertEqual(out[0], '99');
-});
-
-run('assign through immutable borrow is error', () => {
-  assertThrows(() => oc(`
-isi ubah x = 10
-isi r = &x
-*r = 20
-`), 'Tidak bisa mengubah nilai melalui referensi');
-});
-
-run('use-after-move error in indonesian', () => {
-  assertThrows(() => oc(`
-struktur Kotak { nilai: angka }
-isi a = Kotak { nilai: 1 }
-isi b = a
-cetak(a.nilai)
-`), 'sudah dipindahkan');
-});
-
-run('IR normalizer annotates copy op on primitive VarDecl', () => {
-  const src = 'isi x = 10';
-  const grammar = detectGrammar(src);
-  const ast = parse(tokenize(src));
-  typecheck(ast, grammar);
-  ownershipCheck(ast, grammar);
-  irNormalize(ast);
-  assertEqual(ast.body[0]._ownershipOp, 'copy');
-});
-
-run('IR normalizer annotates move op on struct VarDecl', () => {
-  const src = 'struktur Kotak { v: angka } isi a = Kotak { v: 1 } isi b = a';
-  const grammar = detectGrammar(src);
-  const ast = parse(tokenize(src));
-  typecheck(ast, grammar);
-  ownershipCheck(ast, grammar);
-  irNormalize(ast);
-  assertEqual(ast.body[2]._ownershipOp, 'move');
-});
-
-run('IR normalizer annotates borrow op', () => {
-  const src = 'isi x = 10 isi r = &x';
-  const grammar = detectGrammar(src);
-  const ast = parse(tokenize(src));
-  typecheck(ast, grammar);
-  ownershipCheck(ast, grammar);
-  irNormalize(ast);
-  assertEqual(ast.body[1]._ownershipOp, 'borrow');
-  assertEqual(ast.body[1]._borrowTarget, 'x');
-});
-
-run('borrow released after scope — original usable again (struct)', () => {
-  oc(`
-struktur Kotak { nilai: angka }
-isi a = Kotak { nilai: 1 }
-fungsi tes(b: Kotak) { cetak(b.nilai) }
-isi r = &a
-cetak(*r)
-`);
-});
-
-run('struct reassign via = moves source', () => {
-  assertThrows(() => oc(`
-struktur Kotak { nilai: angka }
-isi ubah a = Kotak { nilai: 1 }
-isi b = Kotak { nilai: 2 }
-a = b
-cetak(b.nilai)
-`), 'sudah dipindahkan');
-});
-
-run('struct init followed by deref write parses correctly', () => {
-  oc(`
-struktur Kotak { nilai: angka }
-isi ubah a = Kotak { nilai: 1 }
-isi r = &ubah a
-isi b = Kotak { nilai: 2 }
-*r = b
-`);
 });
 
 // ── Array Type System Tests ────────────────────────────────────────────────────
@@ -1182,7 +992,7 @@ run('executes anonymous function stored in variable', () => {
 
 run('anonymous function passed as argument', () => {
   const js = compile(`
-fungsi terapkan(f: apapun, n: angka): angka { balik f(n) }
+fungsi terapkan(f: apa_saja, n: angka): angka { balik f(n) }
 isi dua_kali = fungsi(x: angka): angka { balik x * 2 }
 `);
   assert(js.includes('function(x)'));
@@ -1233,27 +1043,27 @@ fungsi f() {
 
 // Null
 run('codegen: kosong generates null', () => {
-  const js = compile('isi x: apapun = kosong');
+  const js = compile('isi x: apa_saja = kosong');
   assert(js.includes('null'), `got: ${js}`);
 });
 
 run('null comparison allowed', () => {
-  tc('isi x: apapun = kosong\njika (x == kosong) { cetak("ya") }');
+  tc('isi x: apa_saja = kosong\njika (x == kosong) { cetak("ya") }');
 });
 
 run('executes null check', () => {
-  const out = exec('isi x: apapun = kosong\njika (x == kosong) { cetak("kosong") } lain { cetak("bukan") }');
+  const out = exec('isi x: apa_saja = kosong\njika (x == kosong) { cetak("kosong") } lain { cetak("bukan") }');
   assertEqual(out[0], 'kosong');
 });
 
-// apapun type
-run('apapun type accepts any value', () => {
-  const js = compile('isi x: apapun = 42\nisi y: apapun = "teks"\nisi z: apapun = benar');
+// apa_saja type
+run('apa_saja type accepts any value', () => {
+  const js = compile('isi x: apa_saja = 42\nisi y: apa_saja = "teks"\nisi z: apa_saja = benar');
   assert(js.includes('let x = 42'));
 });
 
-run('function parameter apapun accepts any call arg', () => {
-  tc('fungsi f(x: apapun): apapun { balik x }\nf(42)\nf("teks")\nf(benar)');
+run('function parameter apa_saja accepts any call arg', () => {
+  tc('fungsi f(x: apa_saja): apa_saja { balik x }\nf(42)\nf("teks")\nf(benar)');
 });
 
 // object literal
@@ -1268,12 +1078,12 @@ run('object literal empty', () => {
 });
 
 run('object literal nested in function call', () => {
-  const js = compile('fungsi f(x: apapun): tiada {}\nf({ a: 1, b: benar })');
+  const js = compile('fungsi f(x: apa_saja): tiada {}\nf({ a: 1, b: benar })');
   assert(js.includes('f({ a: 1, b: true })'));
 });
 
 run('object literal as argument to method chain', () => {
-  const js = compile('isi res: apapun = kosong\nres.json({ status: 200 })');
+  const js = compile('isi res: apa_saja = kosong\nres.json({ status: 200 })');
   assert(js.includes('res.json({ status: 200 })'));
 });
 
@@ -1299,22 +1109,22 @@ run('f-string infers string type', () => {
 
 // Destructuring
 run('object destructuring codegen', () => {
-  const js = compile('isi obj: apapun = kosong\nisi { id, nama } = obj');
+  const js = compile('isi obj: apa_saja = kosong\nisi { id, nama } = obj');
   assert(js.includes('let { id, nama } = obj'));
 });
 
 run('array destructuring codegen', () => {
-  const js = compile('isi arr: apapun = kosong\nisi [first, second] = arr');
+  const js = compile('isi arr: apa_saja = kosong\nisi [first, second] = arr');
   assert(js.includes('let [first, second] = arr'));
 });
 
 run('destructuring with rename', () => {
-  const js = compile('isi obj: apapun = kosong\nisi { id: userId } = obj');
+  const js = compile('isi obj: apa_saja = kosong\nisi { id: userId } = obj');
   assert(js.includes('let { id: userId } = obj'));
 });
 
 run('destructured bindings usable', () => {
-  const js = compile('isi obj: apapun = kosong\nisi { id, nama } = obj\ncetak(id)');
+  const js = compile('isi obj: apa_saja = kosong\nisi { id, nama } = obj\ncetak(id)');
   assert(js.includes('console.log(id)'));
 });
 
@@ -1325,7 +1135,7 @@ run('ternary Python-style codegen', () => {
 });
 
 run('ternary does not consume next jika statement', () => {
-  const js = compile('isi x: apapun = kosong\nisi { id } = x\njika (id == kosong) { cetak("nil") }');
+  const js = compile('isi x: apa_saja = kosong\nisi { id } = x\njika (id == kosong) { cetak("nil") }');
   assert(js.includes('let { id } = x'));
   assert(js.includes('if ((id == null))'));
 });
@@ -1337,17 +1147,17 @@ run('ternary in function call', () => {
 
 // Spread
 run('spread in object literal', () => {
-  const js = compile('isi a: apapun = kosong\nisi b = { ...a, key: "val" }');
+  const js = compile('isi a: apa_saja = kosong\nisi b = { ...a, key: "val" }');
   assert(js.includes('{ ...a, key: "val" }'));
 });
 
 run('spread in array literal', () => {
-  const js = compile('isi arr: apapun = kosong\nisi b = [...arr, 10]');
+  const js = compile('isi arr: apa_saja = kosong\nisi b = [...arr, 10]');
   assert(js.includes('[...arr, 10]'));
 });
 
 run('spread in function call', () => {
-  const js = compile('fungsi f(a: apapun, b: apapun): tiada {}\nisi args: apapun = kosong\nf(...args)');
+  const js = compile('fungsi f(a: apa_saja, b: apa_saja): tiada {}\nisi args: apa_saja = kosong\nf(...args)');
   assert(js.includes('f(...args)'));
 });
 
@@ -1488,41 +1298,45 @@ run('codegen: peta value compiles to plain JS object', () => {
   assert(js.includes('{ budi: 90 }'), `got: ${js}`);
 });
 
-// cocok / kasus / lain (match)
+// pilih / kasus / lain (match)
 
-run('tokenizes cocok/kasus as keywords match/case', () => {
-  assertEqual(tokenize('cocok').find(t => t.type === 'KEYWORD').value, 'match');
+run('tokenizes kasus as keyword case', () => {
   assertEqual(tokenize('kasus').find(t => t.type === 'KEYWORD').value, 'case');
 });
 
-run('parse: cocok statement with kasus and lain arms', () => {
-  const src = 'cocok x { kasus 1 -> cetak("satu") kasus 2 -> cetak("dua") lain -> cetak("lainnya") }';
+run('parse: pilih expr { } statement with kasus and lain arms produces MatchStmt', () => {
+  const src = 'pilih x { kasus 1 -> cetak("satu") kasus 2 -> cetak("dua") lain -> cetak("lainnya") }';
   const ast = parse(tokenize(src));
   assertEqual(ast.body[0].type, N.MATCH_STMT);
   assertEqual(ast.body[0].cases.length, 2);
   assert(ast.body[0].defaultCase !== null);
 });
 
-run('codegen: cocok compiles to if/else if/else chain', () => {
-  const js = compile('isi x = 2\ncocok x { kasus 1 -> cetak("satu") kasus 2 -> cetak("dua") lain -> cetak("lainnya") }');
+run('codegen: pilih compiles to if/else if/else chain', () => {
+  const js = compile('isi x = 2\npilih x { kasus 1 -> cetak("satu") kasus 2 -> cetak("dua") lain -> cetak("lainnya") }');
   assert(js.includes('if (') && js.includes('else if (') && js.includes('else {'), `got: ${js}`);
 });
 
-run('executes cocok statement (matches a kasus arm)', () => {
-  const out = exec('isi x = 2\ncocok x { kasus 1 -> cetak("satu") kasus 2 -> cetak("dua") lain -> cetak("lainnya") }');
+run('executes pilih statement (matches a kasus arm)', () => {
+  const out = exec('isi x = 2\npilih x { kasus 1 -> cetak("satu") kasus 2 -> cetak("dua") lain -> cetak("lainnya") }');
   assertEqual(out[0], 'dua');
 });
 
-run('executes cocok statement (falls through to lain)', () => {
-  const out = exec('isi x = 9\ncocok x { kasus 1 -> cetak("satu") kasus 2 -> cetak("dua") lain -> cetak("lainnya") }');
+run('executes pilih statement (falls through to lain)', () => {
+  const out = exec('isi x = 9\npilih x { kasus 1 -> cetak("satu") kasus 2 -> cetak("dua") lain -> cetak("lainnya") }');
   assertEqual(out[0], 'lainnya');
 });
 
-run('typechecker: cocok rejects incompatible kasus type', () => {
+run('typechecker: pilih rejects incompatible kasus type', () => {
   assertThrows(
-    () => tc('isi x: angka = 1\ncocok x { kasus "teks" -> cetak("x") }'),
+    () => tc('isi x: angka = 1\npilih x { kasus "teks" -> cetak("x") }'),
     'Diharapkan'
   );
+});
+
+run('formatter: renders pilih', () => {
+  const out = format('isi x = 2\npilih x { kasus 1 -> cetak("satu") lain -> cetak("lainnya") }');
+  assert(out.includes('pilih x {'), out);
 });
 
 // logika / tiada (renamed bool / void types)
@@ -1571,44 +1385,8 @@ run('typechecker: != kosong comparison valid on optional', () => {
   tc('isi nama: teks? = kosong\njika (nama != kosong) { cetak(nama) }');
 });
 
-run('ownership: optional primitive still uses copy semantics', () => {
-  oc('isi a: angka? = 5\nisi b = a\ncetak(a)');
-});
-
 run('display: optional type shown with ? suffix in Bahasa Indonesia', () => {
   assertThrows(() => tc('isi nama: teks = 5'), "'teks'");
-});
-
-// Kunci / Saluran
-
-run('codegen: kunci() rewritten to mangled runtime name', () => {
-  const js = compile('isi kunci = kunci()');
-  assert(js.includes('__gatra_kunci()'), `got: ${js}`);
-  assert(js.includes('let kunci = __gatra_kunci()'), `got: ${js}`);
-});
-
-run('codegen: saluran() rewritten to mangled runtime name', () => {
-  const js = compile('isi saluran = saluran()');
-  assert(js.includes('__gatra_saluran()'), `got: ${js}`);
-});
-
-run('codegen: kunci prelude only emitted when kunci() is used', () => {
-  const js = compile('isi x = 5\ncetak(x)');
-  assert(!js.includes('__gatra_kunci'), `got: ${js}`);
-});
-
-run('typechecker: isi kunci = kunci() does not throw duplicateVar', () => {
-  tc('isi kunci = kunci()\nkunci.kunci()');
-});
-
-run('typechecker: isi saluran = saluran() does not throw duplicateVar', () => {
-  tc('isi saluran = saluran()\nsaluran.kirim(1)');
-});
-
-run('executes kunci()/buka() mutex cycle', () => {
-  const js = compile('isi kunci = kunci()\nfungsi asinkron f() { tunggu kunci.kunci()\ncetak("dalam")\nkunci.buka() }\nf()');
-  const ctx = vm.createContext({ console: { log: () => {} } });
-  new vm.Script(js).runInContext(ctx); // must not throw (async body scheduled via microtask)
 });
 
 // Uji / Pastikan
@@ -1730,151 +1508,23 @@ run('formatter: renders ekspor/asinkron/tipe alias', () => {
   assert(out.includes('ekspor fungsi asinkron ambil'), out);
 });
 
-// ── Tahap Lanjutan (Pekerja, Concurrency Terstruktur, Pilih) ────────────────
-
-console.log('\n── Tahap Lanjutan ─────────────────────────────────────────────');
-
-run('parse: pekerja fungsi sets isWorker=true', () => {
-  const ast = parse(tokenize('pekerja fungsi hitung(x: angka): angka { balik x }'));
-  assertEqual(ast.body[0].isWorker, true);
-});
-
-run('parse: jalankan expr produces SpawnExpr wrapping a call', () => {
-  const ast = parse(tokenize('pekerja fungsi hitung(x: angka): angka { balik x }\nisi h = jalankan hitung(1)'));
-  assertEqual(ast.body[1].value.type, N.SPAWN_EXPR);
-});
-
-run('typechecker: jalankan on a non-pekerja fungsi is rejected', () => {
-  assertThrows(
-    () => tc('fungsi biasa(x: angka): angka { balik x }\nisi h = jalankan biasa(1)'),
-    'pekerja'
-  );
-});
-
-run('typechecker: jalankan on a pekerja fungsi is accepted', () => {
-  tc('pekerja fungsi hitung(x: angka): angka { balik x }\nfungsi asinkron f(): tiada { isi h = tunggu jalankan hitung(1) }');
-});
-
-run('codegen: jalankan rewritten to __gatra_jalankan with args array', () => {
-  const js = compile('pekerja fungsi hitung(x: angka): angka { balik x }\nisi h = jalankan hitung(7)');
-  assert(js.includes('__gatra_jalankan(hitung, [7])'), `got: ${js}`);
-});
-
-run('codegen: __gatra_jalankan prelude only emitted when jalankan expr used', () => {
-  const js = compile('isi x = 5\ncetak(x)');
-  assert(!js.includes('__gatra_jalankan'), `got: ${js}`);
-});
-
-run('parse: tugas requires a call expression', () => {
-  assertThrows(() => parse(tokenize('tugas 5')), "'tugas' harus diikuti");
-});
-
-run('parse: jalankan { } tunggu produces StructuredSpawn', () => {
-  const ast = parse(tokenize('fungsi asinkron a() { balik 1 }\njalankan {\n  tugas a()\n} tunggu'));
-  assertEqual(ast.body[1].type, N.STRUCTURED_SPAWN);
-});
-
-run('typechecker: jalankan { } tunggu requires async context', () => {
-  assertThrows(
-    () => tc('fungsi asinkron a() { balik 1 }\nfungsi f(): tiada {\n  jalankan {\n    tugas a()\n  } tunggu\n}'),
-    'asinkron'
-  );
-});
-
-run('codegen: jalankan { } tunggu collects tugas calls and awaits Promise.all', () => {
-  const js = compile('fungsi asinkron a() { balik 1 }\nfungsi asinkron f(): tiada {\n  jalankan {\n    tugas a()\n  } tunggu\n}');
-  assert(js.includes('Promise.all('), `got: ${js}`);
-  assert(js.includes('.push(a())'), `got: ${js}`);
-});
-
-run('executes: tugas outside jalankan block is fire-and-forget', () => {
-  const js = compile('fungsi asinkron a(): tiada { cetak("jalan") }\ntugas a()');
-  assert(!js.includes('.push('), `got: ${js}`);
-});
-
-run('parse: pilih requires at least one kasus', () => {
-  assertThrows(() => parse(tokenize('pilih {}')), "minimal satu 'kasus'");
-});
-
-run('parse: pilih produces SelectStmt with cases', () => {
-  const ast = parse(tokenize('isi s1 = saluran()\npilih {\n  kasus s1 -> cetak(1)\n}'));
-  assertEqual(ast.body[1].type, N.SELECT_STMT);
-  assertEqual(ast.body[1].cases.length, 1);
-});
-
-run('typechecker: pilih requires async context', () => {
-  assertThrows(
-    () => tc('fungsi f(): tiada {\n  isi s1 = saluran()\n  pilih {\n    kasus s1 -> cetak(1)\n  }\n}'),
-    'asinkron'
-  );
-});
-
-run('codegen: pilih compiles to Promise.race over .terima()', () => {
-  const js = compile('fungsi asinkron f(): tiada {\n  isi s1 = saluran()\n  pilih {\n    kasus s1 -> cetak(1)\n  }\n}');
-  assert(js.includes('Promise.race(') && js.includes('s1.terima().then('), `got: ${js}`);
-});
-
-run('executes: pekerja/jalankan runs on a real worker thread and returns result', () => {
-  const { spawnSync } = require('child_process');
-  const os   = require('os');
-  const path = require('path');
-  const js = compile('pekerja fungsi hitung(x: angka): angka { balik x * 2 }\nfungsi asinkron utama(): tiada { isi h = tunggu jalankan hitung(21)\ncetak(h) }\nutama()');
-  const tmp = path.join(os.tmpdir(), `gatra_pekerja_test_${Date.now()}.js`);
-  require('fs').writeFileSync(tmp, js, 'utf8');
-  try {
-    const result = spawnSync(process.execPath, [tmp], { encoding: 'utf8' });
-    assertEqual(result.stdout.trim(), '42');
-  } finally {
-    require('fs').rmSync(tmp, { force: true });
-  }
-});
-
-run('executes: jalankan { } tunggu waits for all tugas before continuing', () => {
-  const { spawnSync } = require('child_process');
-  const os   = require('os');
-  const path = require('path');
-  const js = compile('fungsi asinkron a(): tiada { cetak("a") }\nfungsi asinkron b(): tiada { cetak("b") }\nfungsi asinkron utama(): tiada {\n  jalankan {\n    tugas a()\n    tugas b()\n  } tunggu\n  cetak("selesai")\n}\nutama()');
-  const tmp = path.join(os.tmpdir(), `gatra_tugas_test_${Date.now()}.js`);
-  require('fs').writeFileSync(tmp, js, 'utf8');
-  try {
-    const result = spawnSync(process.execPath, [tmp], { encoding: 'utf8' });
-    const lines = result.stdout.trim().split('\n');
-    assertEqual(lines[lines.length - 1], 'selesai');
-  } finally {
-    require('fs').rmSync(tmp, { force: true });
-  }
-});
-
-run('formatter: renders pekerja/jalankan/tugas/pilih', () => {
-  const src = 'pekerja fungsi hitung(x: angka): angka { balik x }\nfungsi asinkron f(): tiada {\n  isi h = tunggu jalankan hitung(1)\n  jalankan {\n    tugas hitung(1)\n  } tunggu\n}';
-  const out = format(src);
-  assert(out.includes('pekerja fungsi hitung'), out);
-  assert(out.includes('jalankan hitung(1)'), out);
-  assert(out.includes('jalankan {') && out.includes('} tunggu'), out);
-});
-
-run('linter: pilih case channel usage counts as used', () => {
-  const ast = parse(tokenize('fungsi asinkron f(): tiada {\n  isi s1 = saluran()\n  pilih {\n    kasus s1 -> cetak(1)\n  }\n}'));
-  assertEqual(lint(ast).filter(f => f.rule === 'variabel-tidak-digunakan').length, 0);
-});
-
 // ── Pengelola Paket (gatra mulai) ────────────────────────────────────────────
 
 console.log('\n── Pengelola Paket ────────────────────────────────────────────');
 
-run('gatra mulai scaffolds a runnable project', () => {
+run('gatra buat scaffolds a runnable project', () => {
   const { spawnSync } = require('child_process');
   const os   = require('os');
   const path = require('path');
   const fs   = require('fs');
   const cliPath = path.resolve(__dirname, '../src/cli/gatra.js');
-  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatra_mulai_'));
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatra_buat_'));
   const projectName = 'proyek_uji';
   try {
-    const init = spawnSync(process.execPath, [cliPath, 'mulai', projectName], { cwd: workDir, encoding: 'utf8' });
+    const init = spawnSync(process.execPath, [cliPath, 'buat', projectName], { cwd: workDir, encoding: 'utf8' });
     assertEqual(init.status, 0);
     const projectDir = path.join(workDir, projectName);
-    assert(fs.existsSync(path.join(projectDir, 'gatra.mod')), 'gatra.mod should exist');
+    assert(fs.existsSync(path.join(projectDir, 'package.json')), 'package.json should exist');
     assert(fs.existsSync(path.join(projectDir, 'utama.gatra')), 'utama.gatra should exist');
     const run = spawnSync(process.execPath, [cliPath, 'jalankan', 'utama.gatra'], { cwd: projectDir, encoding: 'utf8' });
     assertEqual(run.status, 0);
@@ -1884,85 +1534,628 @@ run('gatra mulai scaffolds a runnable project', () => {
   }
 });
 
-// ── LSP (gatra lsp) ──────────────────────────────────────────────────────────
+// ── Validasi tipe numerik: bilangan (int) / pecahan (float) / byte ──────────
 
-console.log('\n── LSP ────────────────────────────────────────────────────────');
+console.log('\n── Validasi Tipe Numerik ───────────────────────────────────────');
 
-const { computeDiagnostics, RpcConnection } = require('../src/lsp/server');
-const { EventEmitter } = require('events');
-
-run('lsp: computeDiagnostics reports a type error', () => {
-  const diags = computeDiagnostics('isi x: teks = 5');
-  assertEqual(diags.length, 1);
-  assertEqual(diags[0].severity, 1);
-  assert(diags[0].message.includes('Diharapkan'), diags[0].message);
+run('typechecker: byte rejects value above 255', () => {
+  assertThrows(() => tc('isi t: byte = 256'), 'jangkauan');
 });
 
-run('lsp: computeDiagnostics reports a parse error', () => {
-  const diags = computeDiagnostics('isi x = ');
-  assertEqual(diags.length, 1);
-  assertEqual(diags[0].severity, 1);
+run('typechecker: byte rejects negative value', () => {
+  assertThrows(() => tc('isi t: byte = -1'), 'jangkauan');
 });
 
-run('lsp: computeDiagnostics reports linter warnings', () => {
-  const diags = computeDiagnostics('fungsi f(): tiada {\n  isi x = 5\n}');
-  assert(diags.some(d => d.severity === 2 && d.source === 'gatra(variabel-tidak-digunakan)'), JSON.stringify(diags));
+run('typechecker: byte accepts 0 and 255 (boundary)', () => {
+  tc('isi a: byte = 0\nisi b: byte = 255');
 });
 
-run('lsp: computeDiagnostics is empty for clean code', () => {
-  assertEqual(computeDiagnostics('isi x: angka = 5\ncetak(x)').length, 0);
+run('typechecker: byte rejects non-integer value', () => {
+  assertThrows(() => tc('isi t: byte = 1.5'), 'jangkauan');
 });
 
-run('lsp: RpcConnection parses Content-Length framed JSON-RPC and dispatches', () => {
-  const input  = new EventEmitter();
-  const writes = [];
-  const output = { write: (d) => writes.push(d) };
-  const rpc = new RpcConnection(input, output);
-  let received = null;
-  rpc.onMessage('foo', (params) => { received = params; return { ok: true }; });
-
-  const msg = JSON.stringify({ jsonrpc: '2.0', method: 'foo', params: { a: 1 }, id: 5 });
-  const framed = `Content-Length: ${Buffer.byteLength(msg)}\r\n\r\n${msg}`;
-  input.emit('data', Buffer.from(framed));
-
-  assertEqual(received.a, 1);
-  assert(writes[0].includes('"result":{"ok":true}'), writes[0]);
+run('typechecker: bilangan rejects a fractional literal', () => {
+  assertThrows(() => tc('isi t: bilangan = 3.14'), 'bukan bilangan bulat');
 });
 
-run('lsp: RpcConnection handles a message split across multiple chunks', () => {
-  const input  = new EventEmitter();
-  const writes = [];
-  const output = { write: (d) => writes.push(d) };
-  const rpc = new RpcConnection(input, output);
-  let received = null;
-  rpc.onMessage('bar', (params) => { received = params; });
-
-  const msg = JSON.stringify({ jsonrpc: '2.0', method: 'bar', params: { b: 2 } });
-  const framed = `Content-Length: ${Buffer.byteLength(msg)}\r\n\r\n${msg}`;
-  const mid = Math.floor(framed.length / 2);
-  input.emit('data', Buffer.from(framed.slice(0, mid)));
-  assertEqual(received, null);
-  input.emit('data', Buffer.from(framed.slice(mid)));
-  assertEqual(received.b, 2);
+run('typechecker: bilangan accepts an integer literal (positive and negative)', () => {
+  tc('isi a: bilangan = 10\nisi b: bilangan = -5');
 });
 
-// ── Ownership Bug Fix: cetak() harus meminjam, bukan memindahkan ────────────
-
-console.log('\n── Ownership: cetak() tidak memindahkan ────────────────────────');
-
-run('ownership: cetak(struct) does not move it — struct usable afterward', () => {
-  oc('struktur T { x: angka }\nisi p = T { x: 1 }\ncetak(p)\ncetak(p.x)');
+run('typechecker: bilangan rejects a negative fractional literal', () => {
+  assertThrows(() => tc('isi t: bilangan = -3.5'), 'bukan bilangan bulat');
 });
 
-run('ownership: cetak(larik) does not move it — larik usable afterward', () => {
-  oc('isi xs: angka[] = [1, 2, 3]\ncetak(xs)\nuntuk n dalam xs { cetak(n) }');
+run('typechecker: pecahan accepts both integer and fractional literals', () => {
+  tc('isi a: pecahan = 3.14\nisi b: pecahan = 10');
 });
 
-run('ownership: passing struct to a real function still moves it', () => {
+run('typechecker: angka (generic) accepts bilangan/pecahan/byte values', () => {
+  tc('isi a: bilangan = 5\nisi b: pecahan = 3.14\nisi c: byte = 100\nisi x: angka = a\nisi y: angka = b\nisi z: angka = c');
+});
+
+run('typechecker: bilangan does NOT accept a pecahan-typed variable', () => {
   assertThrows(
-    () => oc('struktur T { x: angka }\nfungsi f(t: T): angka { balik t.x }\nisi p = T { x: 1 }\nf(p)\ncetak(p.x)'),
-    'dipindahkan'
+    () => tc('isi a: pecahan = 3.14\nisi b: bilangan = a'),
+    'Diharapkan'
   );
+});
+
+run('typechecker: pecahan accepts a bilangan-typed variable (widening)', () => {
+  tc('isi a: bilangan = 5\nisi b: pecahan = a');
+});
+
+run('typechecker: byte literal check applies to function arguments', () => {
+  assertThrows(
+    () => tc('fungsi f(b: byte): tiada {}\nf(300)'),
+    'jangkauan'
+  );
+});
+
+run('typechecker: byte literal check applies to struct field init', () => {
+  assertThrows(
+    () => tc('struktur T { b: byte }\nisi x = T { b: 300 }'),
+    'jangkauan'
+  );
+});
+
+run('typechecker: byte literal check applies to return statements', () => {
+  assertThrows(
+    () => tc('fungsi f(): byte { balik 300 }'),
+    'jangkauan'
+  );
+});
+
+run('typechecker: reassigning a non-integer literal to a bilangan var is rejected', () => {
+  assertThrows(
+    () => tc('isi ubah a: bilangan = 5\na = 3.14'),
+    'bukan bilangan bulat'
+  );
+});
+
+run('typechecker: computed (non-literal) values are not range-checked (documented limitation)', () => {
+  // Nilai dari ekspresi/variabel tidak bisa divalidasi statis — hanya literal langsung.
+  tc('isi a: angka = 999\nisi b: byte = a * 1');
+});
+
+run('codegen: bilangan/pecahan + arithmetic promotes correctly', () => {
+  const js = compile('isi a: bilangan = 5\nisi b: pecahan = 3.14\nisi c: angka = a + b\ncetak(c)');
+  assert(js.includes('let c = (a + b)'), js);
+});
+
+run('typechecker: untuk range accepts bilangan bounds', () => {
+  tc('isi a: bilangan = 0\nisi b: bilangan = 5\nuntuk i dalam a..b { cetak(i) }');
+});
+
+// ── Fondasi PRD Baru: indexing, arrow fn, ?., ??, rest params, javascript {} ─
+
+console.log('\n── Fondasi PRD Baru ────────────────────────────────────────────');
+
+// Indexing: obj[key]
+
+run('parse: obj[key] produces IndexExpr', () => {
+  const ast = parse(tokenize('isi v = arr[0]'));
+  assertEqual(ast.body[0].value.type, N.INDEX_EXPR);
+});
+
+run('codegen: obj[key] compiles to bracket access', () => {
+  const js = compile('isi arr: angka[] = [1,2,3]\ncetak(arr[0])');
+  assert(js.includes('arr[0]'), js);
+});
+
+run('executes: array indexing reads the right element', () => {
+  const out = exec('isi arr: angka[] = [10,20,30]\ncetak(arr[1])');
+  assertEqual(out[0], '20');
+});
+
+run('executes: index assignment mutates the array', () => {
+  const out = exec('isi arr: angka[] = [1,2,3]\narr[0] = 99\ncetak(arr[0])');
+  assertEqual(out[0], '99');
+});
+
+run('typechecker: indexing a larik<T> yields the element type', () => {
+  tc('isi arr: angka[] = [1,2,3]\nisi x: angka = arr[0]');
+});
+
+// Arrow functions
+
+run('parse: (x) => expr produces an arrow FuncExpr', () => {
+  const ast = parse(tokenize('isi f = (x) => x * 2'));
+  const fn = ast.body[0].value;
+  assertEqual(fn.type, N.FUNC_EXPR);
+  assertEqual(fn.isArrow, true);
+  assert(fn.exprBody !== null, 'expected exprBody');
+});
+
+run('parse: (a, b) => { balik a + b } produces an arrow FuncExpr with a block body', () => {
+  const ast = parse(tokenize('isi f = (a, b) => { balik a + b }'));
+  const fn = ast.body[0].value;
+  assertEqual(fn.isArrow, true);
+  assertEqual(fn.exprBody, null);
+  assert(fn.body !== null, 'expected block body');
+});
+
+run('parse: (x) is still a plain parenthesized expression, not an arrow', () => {
+  const ast = parse(tokenize('isi f = (x)'));
+  assertEqual(ast.body[0].value.type, N.IDENTIFIER);
+});
+
+run('codegen: arrow with expr body compiles to JS arrow function', () => {
+  const js = compile('isi f = (x) => x * 2');
+  assert(js.includes('(x) => (') && js.includes('x * 2'), js);
+});
+
+run('executes: arrow function works as a standalone callback', () => {
+  const out = exec('isi kali2 = (x) => x * 2\ncetak(kali2(21))');
+  assertEqual(out[0], '42');
+});
+
+run('executes: arrow function passed directly to array.map', () => {
+  // exec()'s mock console.log joins args with Array.join, which stringifies
+  // an array argument as "2,4,6" (no brackets) — unlike Node's real console.
+  const out = exec('isi xs: angka[] = [1, 2, 3]\ncetak(xs.map((x) => x * 2))');
+  assertEqual(out[0], '2,4,6');
+});
+
+run('formatter: renders arrow function without redundant apa_saja annotation', () => {
+  const out = format('isi f = (x) => x * 2');
+  assert(out.includes('(x) => x * 2'), out);
+  assert(!out.includes('apa_saja'), out);
+});
+
+// Optional chaining ?.
+
+run('parse: a?.b produces MemberExpr with optional=true', () => {
+  const ast = parse(tokenize('isi v = a?.b'));
+  assertEqual(ast.body[0].value.optional, true);
+});
+
+run('parse: a.b produces MemberExpr with optional=false', () => {
+  const ast = parse(tokenize('isi v = a.b'));
+  assertEqual(ast.body[0].value.optional, false);
+});
+
+run('codegen: a?.b compiles to JS optional chaining verbatim', () => {
+  const js = compile('isi obj: apa_saja = kosong\ncetak(obj?.b)');
+  assert(js.includes('obj?.b'), js);
+});
+
+run('executes: ?. short-circuits without throwing on a null/kosong intermediate', () => {
+  // exec()'s mock console.log uses Array.join, which stringifies an
+  // `undefined` argument as '' — unlike Node's real console ('undefined').
+  // The important behavior under test is that this doesn't throw.
+  const out = exec('isi obj: apa_saja = { a: kosong }\ncetak(obj?.a?.b)\ncetak("selesai")');
+  assertEqual(out[0], '');
+  assertEqual(out[1], 'selesai');
+});
+
+// Nullish coalescing ??
+
+run('parse: a ?? b produces BinaryExpr with op ??', () => {
+  const ast = parse(tokenize('isi v = a ?? b'));
+  assertEqual(ast.body[0].value.op, '??');
+});
+
+run('codegen: ?? compiles verbatim (already valid JS)', () => {
+  const js = compile('isi a: apa_saja = kosong\ncetak(a ?? "fallback")');
+  assert(js.includes('(a ?? "fallback")'), js);
+});
+
+run('executes: ?? falls back only on null/undefined, not on falsy values', () => {
+  const out = exec('isi a: apa_saja = kosong\ncetak(a ?? "fallback")\nisi b = 0\ncetak(b ?? 99)');
+  assertEqual(out[0], 'fallback');
+  assertEqual(out[1], '0');
+});
+
+// Rest parameters
+
+run('parse: ...nama produces a rest param as the last parameter', () => {
+  const ast = parse(tokenize('fungsi f(...data): tiada {}'));
+  const p = ast.body[0].params[0];
+  assertEqual(p.rest, true);
+  assertEqual(p.name, 'data');
+});
+
+run('codegen: rest param compiles to JS ...spread parameter', () => {
+  const js = compile('fungsi f(...data): tiada {}');
+  assert(js.includes('function f(...data)'), js);
+});
+
+run('executes: rest param collects all extra call arguments', () => {
+  const out = exec('fungsi jumlahkan(...xs) { isi ubah t = 0\nuntuk n dalam xs { t = t + n }\nbalik t }\ncetak(jumlahkan(1, 2, 3, 4))');
+  assertEqual(out[0], '10');
+});
+
+run('typechecker: fixed params before rest are still required', () => {
+  assertThrows(
+    () => tc('fungsi f(a: angka, ...xs): tiada {}\nf()'),
+    'membutuhkan'
+  );
+});
+
+// javascript { } escape hatch
+
+run('lexer: javascript { } captures raw JS verbatim as one JS_BLOCK token', () => {
+  const toks = tokenize('javascript { const x = 1; }');
+  assertEqual(toks[0].type, 'JS_BLOCK');
+  assert(toks[0].value.includes('const x = 1;'), toks[0].value);
+});
+
+run('lexer: javascript { } correctly skips braces inside string literals', () => {
+  const toks = tokenize('javascript { isi = "}"; }');
+  assertEqual(toks[0].type, 'JS_BLOCK');
+  assertEqual(toks[1].type, 'EOF');
+});
+
+run('parse: javascript { } produces a JsBlockStmt', () => {
+  const ast = parse(tokenize('javascript { const x = 1; }'));
+  assertEqual(ast.body[0].type, N.JS_BLOCK_STMT);
+});
+
+run('codegen: javascript { } is emitted verbatim, untouched', () => {
+  const js = compile('javascript { const x = 1 + 1; }');
+  assert(js.includes('const x = 1 + 1;'), js);
+});
+
+run('executes: javascript { } runs as real JavaScript inline', () => {
+  const out = exec('javascript { console.log(1 + 2); }\ncetak("selesai")');
+  assertEqual(out[0], '3');
+  assertEqual(out[1], 'selesai');
+});
+
+// ── Timeout: tunggu expr batas N detik ───────────────────────────────────────
+
+console.log('\n── Timeout (batas) ─────────────────────────────────────────────');
+
+run('tokenizes batas/detik as keywords timeout/second', () => {
+  assertEqual(tokenize('batas').find(t => t.type === 'KEYWORD').value, 'timeout');
+  assertEqual(tokenize('detik').find(t => t.type === 'KEYWORD').value, 'second');
+});
+
+run('parse: tunggu expr batas N detik sets timeoutMs = N * 1000', () => {
+  const ast = parse(tokenize('fungsi asinkron f() { isi h = tunggu g() batas 5 detik }'));
+  const awaitNode = ast.body[0].body.body[0].value;
+  assertEqual(awaitNode.type, N.AWAIT_EXPR);
+  assertEqual(awaitNode.timeoutMs, 5000);
+});
+
+run('parse: plain tunggu expr (no batas) has timeoutMs = null', () => {
+  const ast = parse(tokenize('fungsi asinkron f() { isi h = tunggu g() }'));
+  assertEqual(ast.body[0].body.body[0].value.timeoutMs, null);
+});
+
+run('codegen: batas compiles to Promise.race with __gatra_batas(ms)', () => {
+  const js = compile('fungsi asinkron g(): teks { balik "x" }\nfungsi asinkron f() { isi h = tunggu g() batas 5 detik }');
+  assert(js.includes('Promise.race([g(), __gatra_batas(5000)])'), js);
+  assert(js.includes('function __gatra_batas('), js);
+});
+
+run('codegen: __gatra_batas prelude omitted when batas is not used', () => {
+  const js = compile('fungsi asinkron g(): teks { balik "x" }\nfungsi asinkron f() { isi h = tunggu g() }');
+  assert(!js.includes('__gatra_batas'), js);
+});
+
+run('formatter: renders batas N detik back from timeoutMs', () => {
+  const out = format('fungsi asinkron f() { isi h = tunggu g() batas 5 detik }');
+  assert(out.includes('tunggu g() batas 5 detik'), out);
+});
+
+run('executes: batas resolves normally when the awaited call finishes in time', () => {
+  const { spawnSync } = require('child_process');
+  const os   = require('os');
+  const path = require('path');
+  const js = compile('fungsi asinkron cepat(): teks { balik "oke" }\nfungsi asinkron utama(): tiada { isi h = tunggu cepat() batas 5 detik\ncetak(h) }\nutama()');
+  const tmp = path.join(os.tmpdir(), `gatra_batas_ok_${Date.now()}.js`);
+  require('fs').writeFileSync(tmp, js, 'utf8');
+  try {
+    const result = spawnSync(process.execPath, [tmp], { encoding: 'utf8' });
+    assertEqual(result.stdout.trim(), 'oke');
+    assertEqual(result.status, 0);
+  } finally {
+    require('fs').rmSync(tmp, { force: true });
+  }
+});
+
+run('executes: batas rejects with a Timeout error when the deadline passes first', () => {
+  const { spawnSync } = require('child_process');
+  const os   = require('os');
+  const path = require('path');
+  const js = compile('impor tempo dari "node:timers/promises"\nfungsi asinkron lambat(): teks { tunggu tempo.setTimeout(3000)\nbalik "lambat" }\nfungsi asinkron utama(): tiada { coba { isi h = tunggu lambat() batas 1 detik\ncetak(h) } tangkap (e) { cetak("timeout:")\ncetak(e.message) } }\nutama()');
+  const tmp = path.join(os.tmpdir(), `gatra_batas_timeout_${Date.now()}.js`);
+  require('fs').writeFileSync(tmp, js, 'utf8');
+  try {
+    const result = spawnSync(process.execPath, [tmp], { encoding: 'utf8', timeout: 5000 });
+    const lines = result.stdout.trim().split('\n');
+    assertEqual(lines[0], 'timeout:');
+    assertEqual(lines[1], 'Timeout');
+  } finally {
+    require('fs').rmSync(tmp, { force: true });
+  }
+});
+
+// ── Object Transformation: dengan / ubah ─────────────────────────────────────
+
+console.log('\n── dengan / ubah ────────────────────────────────────────────────');
+
+run('parse: dengan X { ... } produces an ObjectTransformExpr with spread=false', () => {
+  const ast = parse(tokenize('isi p = dengan user {\n  id\n  nama = name\n}'));
+  const node = ast.body[0].value;
+  assertEqual(node.type, N.OBJECT_TRANSFORM_EXPR);
+  assertEqual(node.spread, false);
+  assertEqual(node.fields.length, 2);
+});
+
+run('parse: dengan bare field is shorthand — value is an Identifier with the same name', () => {
+  const ast = parse(tokenize('isi p = dengan user {\n  id\n}'));
+  const field = ast.body[0].value.fields[0];
+  assertEqual(field.name, 'id');
+  assertEqual(field.value.type, N.IDENTIFIER);
+  assertEqual(field.value.name, 'id');
+});
+
+run('parse: ubah X { ... } produces an ObjectTransformExpr with spread=true', () => {
+  const ast = parse(tokenize('isi p = ubah user {\n  nama = "Budi"\n}'));
+  assertEqual(ast.body[0].value.spread, true);
+});
+
+run('parse: ubah requires a value — bare field name is rejected', () => {
+  assertThrows(() => parse(tokenize('isi p = ubah user {\n  nama\n}')), "harus diisi lewat 'nama = ekspresi'");
+});
+
+run('parse: isi ubah x (mutable var) still parses — no conflict with the new ubah expression', () => {
+  const ast = parse(tokenize('isi ubah x = 5'));
+  assertEqual(ast.body[0].mutable, true);
+});
+
+run('typechecker: bare identifiers inside dengan/ubah fields do not need to be declared', () => {
+  tc('isi user = { id: 1, name: "Budi" }\nisi p = dengan user {\n  id\n  nama = name\n}');
+  tc('isi user = { nama: "Andi", umur: 20 }\nisi p = ubah user {\n  umur = umur + 1\n}');
+});
+
+run('codegen: dengan compiles to an IIFE producing a plain object (no spread)', () => {
+  const js = compile('isi user = { id: 1 }\nisi p = dengan user {\n  id\n}');
+  assert(js.includes('((__dengan0) => ({ id: __dengan0.id }))(user)'), js);
+});
+
+run('codegen: ubah compiles to an IIFE that spreads the source first', () => {
+  const js = compile('isi user = { umur: 20 }\nisi p = ubah user {\n  umur = umur + 1\n}');
+  assert(js.includes('...__dengan0'), js);
+  assert(js.includes('__dengan0.umur + 1'), js);
+});
+
+run('executes: dengan renames and computes fields from the source object', () => {
+  const out = exec('isi user = { id: 1, name: "Budi", email: "b@x.com", status: "active" }\nisi p = dengan user {\n  id\n  nama = name\n  email\n  aktif = status == "active"\n}\ncetak(p.nama)\ncetak(p.aktif)');
+  assertEqual(out[0], 'Budi');
+  assertEqual(out[1], 'true');
+});
+
+run('executes: dengan does not include unlisted fields from the source', () => {
+  // exec()'s mock console.log uses Array.join, which stringifies an
+  // `undefined` argument as '' — unlike Node's real console ('undefined').
+  const out = exec('isi user = { id: 1, name: "Budi", secret: "x" }\nisi p = dengan user {\n  id\n}\ncetak(p.secret)');
+  assertEqual(out[0], '');
+});
+
+run('executes: ubah keeps all original fields and only overrides the listed ones', () => {
+  const out = exec('isi user = { nama: "Andi", umur: 20, kota: "Bandung" }\nisi p = ubah user {\n  nama = "Budi"\n}\ncetak(p.umur)\ncetak(p.kota)\ncetak(p.nama)');
+  assertEqual(out[0], '20');
+  assertEqual(out[1], 'Bandung');
+  assertEqual(out[2], 'Budi');
+});
+
+run('executes: ubah does not mutate the original source object', () => {
+  const out = exec('isi user = { umur: 20 }\nisi p = ubah user {\n  umur = 99\n}\ncetak(user.umur)\ncetak(p.umur)');
+  assertEqual(out[0], '20');
+  assertEqual(out[1], '99');
+});
+
+run('executes: nested arrow params inside a dengan/ubah field are not corrupted', () => {
+  const out = exec('isi user = { daftar: [1, 2, 3] }\nisi p = dengan user {\n  hasil = daftar.map((n) => n * 2)\n}\ncetak(p.hasil)');
+  assertEqual(out[0], '2,4,6');
+});
+
+run('linter: dengan/ubah field identifiers do not count as scope usage or trigger undefined warnings', () => {
+  const ast = parse(tokenize('isi user = { id: 1 }\nisi p = dengan user {\n  id\n}\ncetak(p)'));
+  assertEqual(lint(ast).length, 0);
+});
+
+run('formatter: dengan round-trips with shorthand fields preserved', () => {
+  const out = format('isi p = dengan user {\n  id\n  nama = name\n}');
+  assert(out.includes('dengan user {'), out);
+  assert(/\n\s*id\n/.test(out), out); // shorthand 'id' stays bare, not 'id = id'
+});
+
+run('formatter: ubah round-trips', () => {
+  const out = format('isi p = ubah user {\n  umur = umur + 1\n}');
+  assert(out.includes('ubah user {') && out.includes('umur = umur + 1'), out);
+});
+
+// ── hasil<T,E>: berhasil / gagal / cocok pattern matching ────────────────────
+
+console.log('\n── hasil<T,E> ──────────────────────────────────────────────────');
+
+run('parse: hasil<T, E> return type parses to canonical result<T, E>', () => {
+  const ast = parse(tokenize('fungsi bagi(a: angka, b: angka): hasil<angka, teks> { balik berhasil(1) }'));
+  assertEqual(ast.body[0].returnType, 'result<number, string>');
+});
+
+run('parse: "hasil" is still usable as a plain variable name', () => {
+  const ast = parse(tokenize('isi hasil = 5\ncetak(hasil)'));
+  assertEqual(ast.body[0].name, 'hasil');
+});
+
+run('parse: cocok expr { berhasil(n) => .. gagal(e) => .. } produces MatchResultStmt', () => {
+  const ast = parse(tokenize('cocok r {\n  berhasil(nilai) => cetak(nilai)\n  gagal(galat) => cetak(galat)\n}'));
+  const node = ast.body[0];
+  assertEqual(node.type, N.MATCH_RESULT_STMT);
+  assertEqual(node.okArm.binding, 'nilai');
+  assertEqual(node.errArm.binding, 'galat');
+});
+
+run('parse: cocok accepts just one arm (berhasil or gagal alone)', () => {
+  const ast = parse(tokenize('cocok r {\n  berhasil(n) => cetak(n)\n}'));
+  assert(ast.body[0].okArm !== null);
+  assertEqual(ast.body[0].errArm, null);
+});
+
+run('parse: cocok rejects an unknown pattern', () => {
+  assertThrows(() => parse(tokenize('cocok r {\n  entahapa(n) => cetak(n)\n}')), "hanya menerima pola");
+});
+
+run('parse: cocok rejects a duplicate berhasil arm', () => {
+  assertThrows(
+    () => parse(tokenize('cocok r {\n  berhasil(a) => cetak(a)\n  berhasil(b) => cetak(b)\n}')),
+    "hanya boleh muncul sekali"
+  );
+});
+
+run('parse: cocok with no arms at all is rejected', () => {
+  assertThrows(() => parse(tokenize('cocok r {}')), "membutuhkan minimal satu pola");
+});
+
+run('typechecker: berhasil/gagal calls and cocok arms type-check without error', () => {
+  tc('fungsi bagi(a: angka, b: angka): hasil<angka, teks> {\n  jika (b == 0) { balik gagal("nol") }\n  balik berhasil(a / b)\n}\nisi r = bagi(10, 2)\ncocok r {\n  berhasil(nilai) => cetak(nilai)\n  gagal(galat) => cetak(galat)\n}');
+});
+
+run('codegen: berhasil/gagal rewritten to mangled runtime constructors', () => {
+  const js = compile('fungsi f(): hasil<angka, teks> { balik berhasil(1) }');
+  assert(js.includes('__gatra_berhasil(1)'), js);
+  assert(js.includes("function __gatra_berhasil("), js);
+});
+
+run('codegen: hasil prelude omitted when berhasil/gagal/cocok are not used', () => {
+  const js = compile('isi x = 5\ncetak(x)');
+  assert(!js.includes('__gatra_berhasil') && !js.includes('__gatra_gagal'), js);
+});
+
+run('codegen: cocok compiles to tag checks with bound const per arm', () => {
+  const js = compile('isi r: apa_saja = kosong\ncocok r {\n  berhasil(nilai) => cetak(nilai)\n  gagal(galat) => cetak(galat)\n}');
+  assert(js.includes("__tag === 'berhasil'"), js);
+  assert(js.includes("__tag === 'gagal'"), js);
+  assert(js.includes('const nilai = '), js);
+  assert(js.includes('const galat = '), js);
+});
+
+run('executes: cocok runs the berhasil arm and binds the wrapped value', () => {
+  const out = exec('fungsi bagi(a: angka, b: angka): hasil<angka, teks> {\n  jika (b == 0) { balik gagal("nol") }\n  balik berhasil(a / b)\n}\nisi r = bagi(10, 2)\ncocok r {\n  berhasil(nilai) => cetak(nilai)\n  gagal(galat) => cetak(galat)\n}');
+  assertEqual(out[0], '5');
+});
+
+run('executes: cocok runs the gagal arm and binds the wrapped error', () => {
+  const out = exec('fungsi bagi(a: angka, b: angka): hasil<angka, teks> {\n  jika (b == 0) { balik gagal("tidak dapat membagi dengan nol") }\n  balik berhasil(a / b)\n}\nisi r = bagi(10, 0)\ncocok r {\n  berhasil(nilai) => cetak(nilai)\n  gagal(galat) => cetak(galat)\n}');
+  assertEqual(out[0], 'tidak dapat membagi dengan nol');
+});
+
+run('linter: cocok arm bindings do not trigger unused-variable warnings', () => {
+  const ast = parse(tokenize('isi r: apa_saja = kosong\ncocok r {\n  berhasil(nilai) => cetak(1)\n  gagal(galat) => cetak(2)\n}'));
+  assertEqual(lint(ast).filter(f => f.rule === 'variabel-tidak-digunakan').length, 0);
+});
+
+run('formatter: cocok round-trips with berhasil/gagal arms', () => {
+  const out = format('cocok r {\n  berhasil(nilai) => cetak(nilai)\n  gagal(galat) => cetak(galat)\n}');
+  assert(out.includes('cocok r {'), out);
+  assert(out.includes('berhasil(nilai) => cetak(nilai)'), out);
+  assert(out.includes('gagal(galat) => cetak(galat)'), out);
+});
+
+run('formatter: hasil<T, E> return type round-trips (regression: was leaking canonical result<T, E>)', () => {
+  const src = 'fungsi bagi(a: angka, b: angka): hasil<angka, teks> { balik berhasil(1) }';
+  const once = format(src);
+  assert(once.includes('hasil<angka, teks>'), once);
+  assert(!once.includes('result<'), once);
+  assertEqual(once, format(once));
+});
+
+// ── ukur "label" { ... } — timing / observability ────────────────────────────
+
+console.log('\n── ukur (timing) ───────────────────────────────────────────────');
+
+run('tokenizes ukur as keyword measure', () => {
+  assertEqual(tokenize('ukur').find(t => t.type === 'KEYWORD').value, 'measure');
+});
+
+run('parse: ukur "label" { ... } produces a MeasureStmt', () => {
+  const ast = parse(tokenize('ukur "proses" {\n  cetak(1)\n}'));
+  assertEqual(ast.body[0].type, N.MEASURE_STMT);
+  assertEqual(ast.body[0].label, 'proses');
+});
+
+run('typechecker: tunggu inside ukur still requires an async enclosing function', () => {
+  assertThrows(
+    () => tc('fungsi asinkron g(): tiada {}\nfungsi f(): tiada {\n  ukur "x" {\n    tunggu g()\n  }\n}'),
+    'asinkron'
+  );
+  tc('fungsi asinkron g(): tiada {}\nfungsi asinkron f(): tiada {\n  ukur "x" {\n    tunggu g()\n  }\n}');
+});
+
+run('codegen: ukur wraps the body in try/finally and logs elapsed ms', () => {
+  const js = compile('ukur "proses" {\n  cetak(1)\n}');
+  assert(js.includes('performance.now()'), js);
+  assert(js.includes('try {') && js.includes('} finally {'), js);
+  assert(js.includes('"proses" + \':'), js);
+  assert(js.includes("+ 'ms'"), js);
+});
+
+run('formatter: ukur round-trips', () => {
+  const out = format('ukur "proses" {\n  cetak(1)\n}');
+  assert(out.includes('ukur "proses" {'), out);
+});
+
+run('executes: ukur logs "<label>: <N>ms" and still runs the body normally', () => {
+  // Regression: vm.createContext() sandbox in cli/gatra.js did not expose
+  // 'performance' (or setTimeout et al.), so this threw ReferenceError when
+  // run through 'gatra jalankan' on a file with no impor statements.
+  const { spawnSync } = require('child_process');
+  const os   = require('os');
+  const path = require('path');
+  const js = compile('fungsi utama(): tiada {\n  ukur "proses" {\n    cetak("dalam")\n  }\n}\nutama()');
+  const tmp = path.join(os.tmpdir(), `gatra_ukur_test_${Date.now()}.js`);
+  require('fs').writeFileSync(tmp, js, 'utf8');
+  try {
+    const result = spawnSync(process.execPath, [tmp], { encoding: 'utf8' });
+    assertEqual(result.status, 0);
+    const lines = result.stdout.trim().split('\n');
+    assertEqual(lines[0], 'dalam');
+    assert(/^proses: \d+ms$/.test(lines[1]), result.stdout);
+  } finally {
+    require('fs').rmSync(tmp, { force: true });
+  }
+});
+
+run('executes via gatra jalankan CLI: ukur works with no impor statements (sandboxed vm path)', () => {
+  const { spawnSync } = require('child_process');
+  const os   = require('os');
+  const path = require('path');
+  const cliPath = path.resolve(__dirname, '../src/cli/gatra.js');
+  const tmp = path.join(os.tmpdir(), `gatra_ukur_cli_test_${Date.now()}.gatra`);
+  require('fs').writeFileSync(tmp, 'ukur "proses" {\n  cetak("dalam")\n}\n', 'utf8');
+  try {
+    const result = spawnSync(process.execPath, [cliPath, 'jalankan', tmp], { encoding: 'utf8' });
+    assertEqual(result.status, 0);
+    const lines = result.stdout.trim().split('\n');
+    assertEqual(lines[0], 'dalam');
+    assert(/^proses: \d+ms$/.test(lines[1]), result.stdout);
+  } finally {
+    require('fs').rmSync(tmp, { force: true });
+  }
+});
+
+run('executes: ukur still logs duration even when the body returns early', () => {
+  const { spawnSync } = require('child_process');
+  const os   = require('os');
+  const path = require('path');
+  const js = compile('fungsi cepat(): angka {\n  ukur "cepat" {\n    balik 1\n  }\n}\ncetak(cepat())');
+  const tmp = path.join(os.tmpdir(), `gatra_ukur_return_${Date.now()}.js`);
+  require('fs').writeFileSync(tmp, js, 'utf8');
+  try {
+    const result = spawnSync(process.execPath, [tmp], { encoding: 'utf8' });
+    assertEqual(result.status, 0);
+    const lines = result.stdout.trim().split('\n');
+    assert(/^cepat: \d+ms$/.test(lines[0]), result.stdout);
+    assertEqual(lines[1], '1');
+  } finally {
+    require('fs').rmSync(tmp, { force: true });
+  }
 });
 
 // ── Summary ───────────────────────────────────────────────────────────────────

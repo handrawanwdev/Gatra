@@ -37,6 +37,9 @@ const TokenType = {
   DOTDOT:     'DOTDOT',     // ..
   ELLIPSIS:   'ELLIPSIS',  // ...
   ARROW:      'ARROW',     // ->
+  FAT_ARROW:  'FAT_ARROW', // =>
+  QDOT:       'QDOT',      // ?.
+  QQ:         'QQ',        // ??
   AND:        'AND',        // &&
   OR:         'OR',         // ||
 
@@ -45,6 +48,8 @@ const TokenType = {
   LT:         'LT',         // <
   GTE:        'GTE',        // >=
   LTE:        'LTE',        // <=
+
+  JS_BLOCK:   'JS_BLOCK',   // javascript { ...raw... }
 
   EOF:        'EOF',
 };

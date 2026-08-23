@@ -7,7 +7,7 @@ isi kali = fungsi(a: angka, b: angka): angka {
 cetak(kali(3, 4))
 
 // Fungsi anonim langsung dipakai sebagai argumen
-fungsi terapkan(a: angka, b: angka, operasi: apapun): angka {
+fungsi terapkan(a: angka, b: angka, operasi: apa_saja): angka {
   balik operasi(a, b)
 }
 cetak(terapkan(10, 5, fungsi(a: angka, b: angka): angka { balik a + b }))

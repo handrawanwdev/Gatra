@@ -10,14 +10,27 @@ const os = require("os");
 const { tokenize } = require("../lexer/lexer");
 const { parse } = require("../parser/parser");
 const { typecheck } = require("../typechecker/typechecker");
-const { ownershipCheck } = require("../ownership/ownership-checker");
-const { irNormalize } = require("../ir/ir-normalizer");
 const { generate } = require("../codegen/codegen");
 const { obfuscate } = require("../codegen/obfuscator");
 const { detectGrammar } = require("../lexer/keywords");
 const { lint } = require("../linter/linter");
 const { format } = require("../formatter/formatter");
-const { startServer } = require("../lsp/server");
+
+// Globals a vm.createContext() sandbox does NOT inherit from the host
+// process automatically — needed by generated code that isn't routed
+// through runEsm() (e.g. 'ukur' uses performance.now(), 'batas' uses
+// setTimeout()).
+function baseVmGlobals(filePath) {
+  return {
+    console,
+    process,
+    require,
+    performance,
+    setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
+    __filename: path.resolve(filePath),
+    __dirname: path.dirname(path.resolve(filePath)),
+  };
+}
 
 // ── Compiler pipeline ─────────────────────────────────────────────────────────
 
@@ -26,8 +39,6 @@ function compile(source, opts) {
   const tokens = tokenize(source);
   const ast = parse(tokens);
   typecheck(ast, grammar);
-  ownershipCheck(ast, grammar);
-  irNormalize(ast);
   return generate(ast, opts);
 }
 
@@ -243,13 +254,7 @@ function cmdRun(filePath) {
     if (js.includes("import ") || js.includes("export ")) {
       runEsm(filePath, js, source);
     } else {
-      const ctx = vm.createContext({
-        console,
-        process,
-        require,
-        __filename: path.resolve(filePath),
-        __dirname: path.dirname(path.resolve(filePath)),
-      });
+      const ctx = vm.createContext(baseVmGlobals(filePath));
       new vm.Script(js, { filename: filePath }).runInContext(ctx);
     }
   } catch (err) {
@@ -331,13 +336,7 @@ function cmdTest(filePath) {
     if (js.includes("import ") || js.includes("export ")) {
       runEsm(filePath, js, source);
     } else {
-      const ctx = vm.createContext({
-        console,
-        process,
-        require,
-        __filename: path.resolve(filePath),
-        __dirname: path.dirname(path.resolve(filePath)),
-      });
+      const ctx = vm.createContext(baseVmGlobals(filePath));
       new vm.Script(js, { filename: filePath }).runInContext(ctx);
     }
   } catch (err) {
@@ -448,13 +447,12 @@ function cmdBuildProject(srcDir, outDir, samar) {
 }
 
 // ── Pengelola Paket ───────────────────────────────────────────────────────────
-// MVP: tidak ada registry Gatra sendiri — 'pasang'/'perbarui'/'hapus' membungkus
-// npm secara langsung, konsisten dengan prinsip "JavaScript adalah fondasi"
-// (bagian 37) dan ekosistem Node.js yang sudah dipakai Gatra.
+// Gatra v0.1 tidak punya package manager sendiri (Non-Goal) — proyek baru
+// langsung pakai package.json/npm/node_modules standar Node.js.
 
 function cmdInit(name) {
   if (!name) {
-    console.error("Error: nama proyek tidak ditentukan. Contoh: gatra mulai proyek-saya");
+    console.error("Error: nama proyek tidak ditentukan. Contoh: gatra buat proyek-saya");
     process.exit(1);
   }
   const dir = path.resolve(name);
@@ -465,49 +463,19 @@ function cmdInit(name) {
 
   fs.mkdirSync(dir, { recursive: true });
 
-  const mod = `nama: ${name}\nversi: 0.1.0\n`;
-  fs.writeFileSync(path.join(dir, "gatra.mod"), mod, "utf8");
+  const pkg = {
+    name,
+    version: "0.1.0",
+    type: "module",
+    scripts: { start: "gatra jalankan utama.gatra" },
+  };
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(pkg, null, 2) + "\n", "utf8");
 
   const utama = `fungsi utama() {\n  cetak("Halo, ${name}!")\n}\n\nutama()\n`;
   fs.writeFileSync(path.join(dir, "utama.gatra"), utama, "utf8");
 
   console.log(`  ✓  Proyek '${name}' dibuat`);
   console.log(`\ncd ${name}\ngatra jalankan utama.gatra`);
-}
-
-function runNpm(npmArgs) {
-  const result = spawnSync("npm", npmArgs, { stdio: "inherit" });
-  if (result.error) {
-    console.error(`Error: gagal menjalankan npm — ${result.error.message}`);
-    process.exit(1);
-  }
-  process.exit(result.status ?? 0);
-}
-
-function cmdInstall(pkgs) {
-  runNpm(pkgs.length > 0 ? ["install", ...pkgs] : ["install"]);
-}
-
-function cmdUpdate(pkgs) {
-  runNpm(pkgs.length > 0 ? ["update", ...pkgs] : ["update"]);
-}
-
-function cmdUninstall(pkgs) {
-  if (pkgs.length === 0) {
-    console.error("Error: nama paket tidak ditentukan. Contoh: gatra hapus lodash");
-    process.exit(1);
-  }
-  runNpm(["uninstall", ...pkgs]);
-}
-
-function cmdClean() {
-  const dist = path.resolve("dist");
-  if (fs.existsSync(dist)) {
-    fs.rmSync(dist, { recursive: true, force: true });
-    console.log(`  ✓  '${path.relative(process.cwd(), dist)}' dihapus`);
-  } else {
-    console.log("  ✓  tidak ada artefak build untuk dibersihkan");
-  }
 }
 
 function cmdVersion() {
@@ -518,7 +486,7 @@ function cmdHelp() {
   console.log(`Gatra — Bahasa pemrograman yang dikompilasi ke JavaScript
 
 Penggunaan:
-  gatra mulai <nama>                           Buat proyek baru
+  gatra buat <nama>                            Buat proyek baru
   gatra jalankan <file>                        Kompilasi dan jalankan file .gatra
   gatra bangun <file> [output] [--samar]       Kompilasi satu file ke .js
   gatra bundel <entry> [output] [--samar]      Bundle semua dependensi ke satu file .js
@@ -526,13 +494,11 @@ Penggunaan:
   gatra uji <file>                             Jalankan blok 'uji' dalam file
   gatra periksa <file>                         Analisis statis (linter)
   gatra rapikan <file> [--tulis]                Format kode (cetak ke stdout, atau --tulis untuk menimpa file)
-  gatra pasang [paket...]                      Pasang dependensi npm (npm install)
-  gatra perbarui [paket...]                    Perbarui dependensi npm (npm update)
-  gatra hapus <paket...>                       Hapus dependensi npm (npm uninstall)
-  gatra bersihkan                              Hapus artefak build (dist/)
-  gatra lsp                                    Jalankan Gatra Language Server (stdio, diagnostics)
   gatra versi                                  Tampilkan versi compiler
   gatra bantuan                                Tampilkan bantuan ini
+
+Gatra tidak punya package manager sendiri — pakai npm langsung
+(npm install, npm update, npm uninstall) untuk dependensi.
 
 Opsi:
   --samar   Hasilkan kode yang disamarkan (identifier dienkripsi, string diubah ke unicode)
@@ -628,33 +594,9 @@ switch (cmd) {
     break;
   }
 
-  case "init":
-  case "mulai":
+  case "create":
+  case "buat":
     cmdInit(args[0]);
-    break;
-
-  case "install":
-  case "pasang":
-    cmdInstall(args);
-    break;
-
-  case "update":
-  case "perbarui":
-    cmdUpdate(args);
-    break;
-
-  case "uninstall":
-  case "hapus":
-    cmdUninstall(args);
-    break;
-
-  case "clean":
-  case "bersihkan":
-    cmdClean();
-    break;
-
-  case "lsp":
-    startServer();
     break;
 
   case "version":

@@ -19,8 +19,6 @@ const NodeType = {
   NUMBER_LITERAL: 'NumberLiteral',
   STRING_LITERAL: 'StringLiteral',
   BOOL_LITERAL:   'BoolLiteral',
-  BORROW_EXPR:    'BorrowExpr',   // &x  or  &mut x
-  DEREF_EXPR:     'DerefExpr',    // *r
   ARRAY_LITERAL:  'ArrayLiteral', // [1, 2, 3]
   LOOP_STMT:      'LoopStmt',     // untuk (range or for-of)
   WHILE_STMT:     'WhileStmt',    // selama
@@ -31,13 +29,9 @@ const NodeType = {
   BREAK_STMT:     'BreakStmt',    // berhenti
   CONTINUE_STMT:  'ContinueStmt', // lanjut
   TYPE_ALIAS_DECL:'TypeAliasDecl',// tipe
-  MATCH_STMT:     'MatchStmt',    // cocok / kasus / lain
+  MATCH_STMT:     'MatchStmt',    // pilih expr / kasus / lain
   TEST_DECL:      'TestDecl',     // uji "label" { ... }
   ASSERT_STMT:    'AssertStmt',   // pastikan expr
-  SPAWN_EXPR:        'SpawnExpr',       // jalankan pekerjaFn(args)
-  TASK_STMT:         'TaskStmt',        // tugas expr()
-  STRUCTURED_SPAWN:  'StructuredSpawn', // jalankan { ... } tunggu
-  SELECT_STMT:       'SelectStmt',      // pilih { kasus saluran -> ... }
   OBJECT_LITERAL:   'ObjectLiteral',   // { key: val, ... }
   TEMPLATE_EXPR:    'TemplateExpr',    // f"Hello {nama}"
   DESTRUCTURE_DECL: 'DestructureDecl', // isi { id, nama } = obj / isi [a, b] = arr
@@ -45,6 +39,11 @@ const NodeType = {
   TERNARY_EXPR:     'TernaryExpr',     // expr jika cond lain alt
   PACKAGE_DECL:   'PackageDeclaration',
   PACKAGE_IMPORT: 'PackageImport',
+  INDEX_EXPR:     'IndexExpr',    // obj[key]
+  JS_BLOCK_STMT:  'JsBlockStmt',  // javascript { ...raw... }
+  OBJECT_TRANSFORM_EXPR: 'ObjectTransformExpr', // dengan X { ... } / ubah X { ... }
+  MATCH_RESULT_STMT: 'MatchResultStmt', // cocok expr { berhasil(n) => ... gagal(e) => ... }
+  MEASURE_STMT: 'MeasureStmt', // ukur "label" { ... }
 };
 
 module.exports = { NodeType };

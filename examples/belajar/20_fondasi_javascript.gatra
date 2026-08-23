@@ -1,0 +1,54 @@
+// 20_fondasi_javascript.gatra — Fondasi kompatibilitas JavaScript
+// indexing, arrow function, ?., ??, rest params, javascript{} escape hatch
+
+// Indexing: obj[key] / larik[i]
+isi skor: angka[] = [95, 82, 76]
+cetak(skor[0])
+skor[0] = 100
+cetak(skor[0])
+
+isi kunciNama = "nama"
+isi pengguna = { nama: "Budi", umur: 20 }
+cetak(pengguna[kunciNama])
+
+// Arrow function — bentuk pendek untuk callback
+isi kuadrat = (x) => x * x
+cetak(kuadrat(6))
+
+isi daftar: angka[] = [1, 2, 3, 4]
+cetak(daftar.map((x) => x * 2))
+
+// Arrow function dengan blok tubuh
+isi jumlahkanDua = (a, b) => {
+  isi hasil = a + b
+  balik hasil
+}
+cetak(jumlahkanDua(10, 20))
+
+// Optional chaining — akses aman ke properti yang mungkin tidak ada
+isi profil: apa_saja = { alamat: { kota: "Jakarta" } }
+cetak(profil?.alamat?.kota)
+cetak(profil?.telepon?.nomor)
+
+// Nullish coalescing — nilai cadangan hanya jika kosong/undefined
+isi namaPengguna: apa_saja = kosong
+cetak(namaPengguna ?? "Tanpa Nama")
+
+isi jumlahLogin = 0
+cetak(jumlahLogin ?? 99)
+
+// Rest parameter — kumpulkan argumen berlebih jadi larik
+fungsi gabung(...bagian) {
+  isi ubah hasil = ""
+  untuk b dalam bagian {
+    hasil = hasil + b
+  }
+  balik hasil
+}
+cetak(gabung("a", "b", "c"))
+
+// javascript { } — escape hatch untuk fitur JS yang belum ada syntax-nya
+javascript {
+  console.log("langsung dari blok javascript {}");
+}
+cetak("kembali ke Gatra")

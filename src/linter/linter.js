@@ -15,8 +15,9 @@ class Scope {
 
 class Linter {
   constructor() {
-    this.findings = [];
-    this.scope    = new Scope(null);
+    this.findings  = [];
+    this.scope     = new Scope(null);
+    this.withDepth = 0; // >0 inside a 'dengan'/'ubah' field — bare identifiers there aren't real scope lookups
   }
 
   push() { this.scope = new Scope(this.scope); }
@@ -147,26 +148,34 @@ class Linter {
         for (const c of node.cases) { this.checkExpr(c.test); this.push(); this.checkStmt(c.body); this.pop(); }
         if (node.defaultCase) { this.push(); this.checkStmt(node.defaultCase); this.pop(); }
         return;
+      case N.MATCH_RESULT_STMT:
+        this.checkExpr(node.discriminant);
+        if (node.okArm) {
+          this.push();
+          this.scope.vars.set(node.okArm.binding, { line: node.line, col: node.col, used: true });
+          this.checkStmt(node.okArm.body);
+          this.pop();
+        }
+        if (node.errArm) {
+          this.push();
+          this.scope.vars.set(node.errArm.binding, { line: node.line, col: node.col, used: true });
+          this.checkStmt(node.errArm.body);
+          this.pop();
+        }
+        return;
       case N.TEST_DECL:
+      case N.MEASURE_STMT:
         this.push(); this.checkBlockBody(node.body.body); this.pop();
         return;
       case N.ASSERT_STMT:
         this.checkExpr(node.expr);
-        return;
-      case N.TASK_STMT:
-        this.checkExpr(node.expr);
-        return;
-      case N.STRUCTURED_SPAWN:
-        this.push(); this.checkBlockBody(node.body.body); this.pop();
-        return;
-      case N.SELECT_STMT:
-        for (const c of node.cases) { this.checkExpr(c.channel); this.push(); this.checkStmt(c.body); this.pop(); }
         return;
       case N.PACKAGE_DECL:
       case N.PACKAGE_IMPORT:
       case N.TYPE_ALIAS_DECL:
       case N.BREAK_STMT:
       case N.CONTINUE_STMT:
+      case N.JS_BLOCK_STMT: // raw escape hatch — nothing to analyze
         return;
     }
   }
@@ -176,20 +185,27 @@ class Linter {
   checkExpr(node) {
     if (!node) return;
     switch (node.type) {
-      case N.IDENTIFIER: this.use(node.name); return;
+      case N.IDENTIFIER:
+        if (this.withDepth === 0) this.use(node.name);
+        return;
       case N.CALL_EXPR:
         if (typeof node.callee === 'object') this.checkExpr(node.callee);
         for (const a of node.args) this.checkExpr(a);
         return;
       case N.MEMBER_EXPR: this.checkExpr(node.object); return;
+      case N.INDEX_EXPR: this.checkExpr(node.object); this.checkExpr(node.index); return;
       case N.ASSIGN_EXPR: this.checkExpr(node.target); this.checkExpr(node.value); return;
       case N.BINARY_EXPR: this.checkExpr(node.left); this.checkExpr(node.right); return;
       case N.UNARY_EXPR: this.checkExpr(node.operand); return;
-      case N.BORROW_EXPR: this.use(node.target); return;
-      case N.DEREF_EXPR: this.use(node.ref); return;
       case N.STRUCT_INIT: for (const f of node.fields) this.checkExpr(f.value); return;
       case N.ARRAY_LITERAL: for (const e of node.elements) this.checkExpr(e); return;
       case N.OBJECT_LITERAL: for (const f of node.fields) this.checkExpr(f.value); return;
+      case N.OBJECT_TRANSFORM_EXPR:
+        this.checkExpr(node.source);
+        this.withDepth++;
+        for (const f of node.fields) this.checkExpr(f.value);
+        this.withDepth--;
+        return;
       case N.TEMPLATE_EXPR:
         for (const p of node.parts) if (p.kind === 'expr') this.checkExpr(p.expr);
         return;
@@ -198,13 +214,17 @@ class Linter {
         this.checkExpr(node.condition); this.checkExpr(node.consequent); this.checkExpr(node.alternate);
         return;
       case N.AWAIT_EXPR: this.checkExpr(node.expr); return;
-      case N.FUNC_EXPR:
+      case N.FUNC_EXPR: {
+        const savedWithDepth = this.withDepth;
+        this.withDepth = 0;
         this.push();
         for (const p of node.params) this.scope.vars.set(p.name, { line: node.line, col: node.col, used: true });
-        this.checkBlockBody(node.body.body);
+        if (node.isArrow && node.exprBody) this.checkExpr(node.exprBody);
+        else this.checkBlockBody(node.body.body);
         this.pop();
+        this.withDepth = savedWithDepth;
         return;
-      case N.SPAWN_EXPR: this.checkExpr(node.call); return;
+      }
       // Literals: nothing to check
     }
   }

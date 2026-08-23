@@ -12,7 +12,7 @@ const INDENT = '  ';
 // Reverse map dari tipe kanonik internal → kata permukaan Bahasa Indonesia
 const TYPE_NAMES = {
   number: 'angka', string: 'teks', bool: 'logika', void: 'tiada',
-  unknown: 'apapun', null: 'kosong',
+  unknown: 'apa_saja', null: 'kosong',
 };
 
 function typeToSource(t) {
@@ -21,6 +21,8 @@ function typeToSource(t) {
   if (t.endsWith('[]')) return typeToSource(t.slice(0, -2)) + '[]';
   const mapMatch = /^map<(.+), (.+)>$/.exec(t);
   if (mapMatch) return `peta<${typeToSource(mapMatch[1])}, ${typeToSource(mapMatch[2])}>`;
+  const resultMatch = /^result<(.+), (.+)>$/.exec(t);
+  if (resultMatch) return `hasil<${typeToSource(resultMatch[1])}, ${typeToSource(resultMatch[2])}>`;
   if (t.startsWith('&mut ')) return '&ubah ' + typeToSource(t.slice(5));
   if (t.startsWith('&'))     return '&' + typeToSource(t.slice(1));
   return TYPE_NAMES[t] || t;
@@ -51,11 +53,10 @@ class Formatter {
       case N.WHILE_STMT:        return this.whileStmt(node);
       case N.TRY_STMT:          return this.tryStmt(node);
       case N.MATCH_STMT:        return this.matchStmt(node);
+      case N.MATCH_RESULT_STMT: return this.matchResultStmt(node);
       case N.TEST_DECL:         return this.testDecl(node);
+      case N.MEASURE_STMT:      return `ukur ${JSON.stringify(node.label)} ${this.block(node.body)}`;
       case N.ASSERT_STMT:       return 'pastikan ' + this.expr(node.expr);
-      case N.TASK_STMT:         return 'tugas ' + this.expr(node.expr);
-      case N.STRUCTURED_SPAWN:  return `jalankan ${this.block(node.body)} tunggu`;
-      case N.SELECT_STMT:       return this.selectStmt(node);
       case N.RETURN_STMT:       return node.value === null ? 'balik' : 'balik ' + this.expr(node.value);
       case N.BREAK_STMT:        return 'berhenti';
       case N.CONTINUE_STMT:     return 'lanjut';
@@ -63,6 +64,7 @@ class Formatter {
       case N.PACKAGE_IMPORT:    return `impor ${node.localName} dari ${JSON.stringify(node.source)}`;
       case N.TYPE_ALIAS_DECL:   return `tipe ${node.name} = ${typeToSource(node.target)}`;
       case N.EXPR_STMT:         return this.expr(node.expr);
+      case N.JS_BLOCK_STMT:     return `javascript {${node.code}}`;
       default:
         throw new Error(`Formatter: unknown statement '${node.type}'`);
     }
@@ -92,19 +94,20 @@ class Formatter {
     return `${kw} [${bindings}] = ${this.expr(node.value)}`;
   }
 
-  params(params) {
+  params(params, arrow = false) {
     return params.map(p => {
+      if (p.rest) return `...${p.name}`;
       const def = p.default ? ` = ${this.expr(p.default)}` : '';
+      if (arrow && p.type === 'unknown') return `${p.name}${def}`;
       return `${p.name}: ${typeToSource(p.type)}${def}`;
     }).join(', ');
   }
 
   fnDecl(node) {
-    const pekerja = node.isWorker ? 'pekerja ' : '';
     const ekspor  = node.isExported ? 'ekspor ' : '';
     const async_  = node.isAsync ? 'asinkron ' : '';
     const ret     = node.returnType ? `: ${typeToSource(node.returnType)}` : '';
-    return `${pekerja}${ekspor}fungsi ${async_}${node.name}(${this.params(node.params)})${ret} ${this.block(node.body)}`;
+    return `${ekspor}fungsi ${async_}${node.name}(${this.params(node.params)})${ret} ${this.block(node.body)}`;
   }
 
   structDecl(node) {
@@ -151,18 +154,21 @@ class Formatter {
     if (node.defaultCase) cases.push(this.ind() + `lain -> ${this.stmt(node.defaultCase)}`);
     const body = cases.join('\n');
     this.depth--;
-    return `cocok ${this.expr(node.discriminant)} {\n${body}\n${this.ind()}}`;
+    return `pilih ${this.expr(node.discriminant)} {\n${body}\n${this.ind()}}`;
   }
 
   testDecl(node) {
     return `uji ${JSON.stringify(node.label)} ${this.block(node.body)}`;
   }
 
-  selectStmt(node) {
+  matchResultStmt(node) {
     this.depth++;
-    const cases = node.cases.map(c => this.ind() + `kasus ${this.expr(c.channel)} -> ${this.stmt(c.body)}`).join('\n');
+    const arms = [];
+    if (node.okArm)  arms.push(this.ind() + `berhasil(${node.okArm.binding}) => ${this.stmt(node.okArm.body)}`);
+    if (node.errArm) arms.push(this.ind() + `gagal(${node.errArm.binding}) => ${this.stmt(node.errArm.body)}`);
+    const body = arms.join('\n');
     this.depth--;
-    return `pilih {\n${cases}\n${this.ind()}}`;
+    return `cocok ${this.expr(node.discriminant)} {\n${body}\n${this.ind()}}`;
   }
 
   // ── Expressions ───────────────────────────────────────────────────────────
@@ -181,7 +187,8 @@ class Formatter {
         const callee = typeof node.callee === 'string' ? 'cetak' : this.expr(node.callee);
         return `${callee}(${node.args.map(a => this.expr(a)).join(', ')})`;
       }
-      case N.MEMBER_EXPR: return `${this.expr(node.object)}.${node.member}`;
+      case N.MEMBER_EXPR: return `${this.expr(node.object)}${node.optional ? '?.' : '.'}${node.member}`;
+      case N.INDEX_EXPR: return `${this.expr(node.object)}[${this.expr(node.index)}]`;
       case N.STRUCT_INIT: {
         const fields = node.fields.map(f => `${f.name}: ${this.expr(f.value)}`).join(', ');
         return `${node.name} { ${fields} }`;
@@ -192,10 +199,20 @@ class Formatter {
         const fields = node.fields.map(f => f.spread ? `...${this.expr(f.value)}` : `${f.name}: ${this.expr(f.value)}`).join(', ');
         return `{ ${fields} }`;
       }
-      case N.BORROW_EXPR: return node.mutable ? `&ubah ${node.target}` : `&${node.target}`;
-      case N.DEREF_EXPR:  return `*${node.ref}`;
-      case N.AWAIT_EXPR:  return `tunggu ${this.expr(node.expr)}`;
-      case N.SPAWN_EXPR:  return `jalankan ${this.expr(node.call)}`;
+      case N.OBJECT_TRANSFORM_EXPR: {
+        const kw = node.spread ? 'ubah' : 'dengan';
+        this.depth++;
+        const fields = node.fields.map(f => {
+          const shorthand = !node.spread && f.value.type === N.IDENTIFIER && f.value.name === f.name;
+          return this.ind() + (shorthand ? f.name : `${f.name} = ${this.expr(f.value)}`);
+        }).join('\n');
+        this.depth--;
+        return `${kw} ${this.expr(node.source)} {\n${fields}\n${this.ind()}}`;
+      }
+      case N.AWAIT_EXPR: {
+        const base = `tunggu ${this.expr(node.expr)}`;
+        return node.timeoutMs != null ? `${base} batas ${node.timeoutMs / 1000} detik` : base;
+      }
       case N.SPREAD_ELEMENT: return `...${this.expr(node.value)}`;
       case N.TERNARY_EXPR: return `${this.expr(node.consequent)} jika ${this.expr(node.condition)} lain ${this.expr(node.alternate)}`;
       case N.TEMPLATE_EXPR: {
@@ -203,6 +220,11 @@ class Formatter {
         return `f"${body}"`;
       }
       case N.FUNC_EXPR: {
+        if (node.isArrow) {
+          const params = this.params(node.params, true);
+          if (node.exprBody) return `(${params}) => ${this.expr(node.exprBody)}`;
+          return `(${params}) => ${this.block(node.body)}`;
+        }
         const async_ = node.isAsync ? 'asinkron ' : '';
         const ret    = node.returnType ? `: ${typeToSource(node.returnType)}` : '';
         return `fungsi ${async_}(${this.params(node.params)})${ret} ${this.block(node.body)}`;

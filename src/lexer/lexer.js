@@ -110,6 +110,51 @@ class Lexer {
     return word;
   }
 
+  // javascript { ...raw JavaScript, copied through verbatim... }
+  // Braces inside string/template literals and line comments are skipped so
+  // they don't throw off the depth count. Escape hatch — content is NOT
+  // type-checked or reformatted; it is passed straight to the JS output.
+  readRawJsBlock(line, col) {
+    while (/\s/.test(this.peek())) this.advance();
+    if (this.peek() !== '{') {
+      throw new LexError("Expected '{' after 'javascript'", this.line, this.col);
+    }
+    this.advance(); // consume opening {
+
+    let raw = '';
+    let depth = 1;
+    while (this.pos < this.source.length && depth > 0) {
+      const c = this.peek();
+      if (c === '"' || c === "'" || c === '`') {
+        const quote = c;
+        raw += this.advance();
+        while (this.pos < this.source.length && this.peek() !== quote) {
+          if (this.peek() === '\\') { raw += this.advance(); if (this.pos < this.source.length) raw += this.advance(); }
+          else raw += this.advance();
+        }
+        if (this.pos < this.source.length) raw += this.advance();
+        continue;
+      }
+      if (c === '/' && this.peek(1) === '/') {
+        while (this.pos < this.source.length && this.peek() !== '\n') raw += this.advance();
+        continue;
+      }
+      if (c === '{') { depth++; raw += this.advance(); continue; }
+      if (c === '}') {
+        depth--;
+        if (depth === 0) { this.advance(); break; }
+        raw += this.advance();
+        continue;
+      }
+      raw += this.advance();
+    }
+
+    if (depth !== 0) {
+      throw new LexError("Unterminated 'javascript' block — missing '}'", line, col);
+    }
+    return raw;
+  }
+
   tokenize() {
     while (this.pos < this.source.length) {
       // Skip whitespace (including newlines — grammar is self-terminating)
@@ -156,6 +201,12 @@ class Lexer {
       if (/[a-zA-Z_]/.test(ch)) {
         const word = this.readWord();
 
+        if (word === 'javascript') {
+          const raw = this.readRawJsBlock(line, col);
+          this.emit(T.JS_BLOCK, raw, line, col);
+          continue;
+        }
+
         if (word in KEYWORD_MAP) {
           const canonical = KEYWORD_MAP[word];
           if (canonical === 'true' || canonical === 'false') {
@@ -194,7 +245,11 @@ class Lexer {
         case '[': this.emit(T.LBRACKET, '[', line, col); break;
         case ']': this.emit(T.RBRACKET, ']', line, col); break;
         case '*': this.emit(T.STAR,   '*',  line, col); break;
-        case '?': this.emit(T.QUESTION, '?', line, col); break;
+        case '?':
+          if (this.peek() === '?')      { this.advance(); this.emit(T.QQ,    '??', line, col); }
+          else if (this.peek() === '.') { this.advance(); this.emit(T.QDOT,  '?.', line, col); }
+          else                          { this.emit(T.QUESTION, '?', line, col); }
+          break;
         case '+': this.emit(T.PLUS,   '+',  line, col); break;
         case '-':
           this.match('>')
@@ -203,9 +258,9 @@ class Lexer {
           break;
         case '/': this.emit(T.SLASH,  '/',  line, col); break;
         case '=':
-          this.match('=')
-            ? this.emit(T.EQEQ,   '==', line, col)
-            : this.emit(T.EQUALS, '=',  line, col);
+          if (this.match('='))      this.emit(T.EQEQ,      '==', line, col);
+          else if (this.match('>')) this.emit(T.FAT_ARROW,  '=>', line, col);
+          else                      this.emit(T.EQUALS,     '=',  line, col);
           break;
         case '!':
           this.match('=')

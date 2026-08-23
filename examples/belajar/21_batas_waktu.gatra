@@ -1,0 +1,31 @@
+// 21_batas_waktu.gatra — 'tunggu expr batas N detik' (timeout untuk Promise)
+//
+// Kompile ke: Promise.race([expr, __gatra_batas(N * 1000)])
+
+impor tempo dari "node:timers/promises"
+
+fungsi asinkron ambilCepat(): teks {
+  balik "selesai dengan cepat"
+}
+
+fungsi asinkron ambilLambat(): teks {
+  tunggu tempo.setTimeout(3000)
+  balik "akhirnya selesai (3 detik)"
+}
+
+fungsi asinkron utama(): tiada {
+  // Selesai sebelum batas — hasil normal
+  isi cepat = tunggu ambilCepat() batas 5 detik
+  cetak(cepat)
+
+  // Lebih lambat dari batas — batas menang, ditangkap sebagai galat
+  coba {
+    isi lambat = tunggu ambilLambat() batas 1 detik
+    cetak(lambat)
+  } tangkap (e) {
+    cetak("gagal:")
+    cetak(e.message)
+  }
+}
+
+utama()

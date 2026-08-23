@@ -27,32 +27,36 @@ const KEYWORD_MAP = {
   'akhirnya': 'finally',  // finally block
   'kosong':   'null',     // null literal
   'ekspor':   'export',   // export modifier before 'fungsi'
-  'cocok':    'match',    // match/switch statement
-  'kasus':    'case',     // arm inside 'cocok'
+  'kasus':    'case',     // arm inside 'pilih'
   'berhenti': 'break',    // break out of loop
   'lanjut':   'continue', // continue to next iteration
   'buat':     'new',      // optional prefix before struct init
   'tipe':     'type',     // type alias declaration
   'uji':      'test',     // test block: uji "label" { ... }
   'pastikan': 'assert',   // assertion inside a test (or anywhere)
-  'jalankan': 'spawn',    // pekerja call (expr) OR concurrency terstruktur block (stmt)
-  'tugas':    'task',     // tugas expr() — spawn a concurrent async task
-  'pekerja':  'worker',   // modifier before 'fungsi' — runs on a real OS thread
-  'pilih':    'select',   // select over multiple 'saluran'
+  'pilih':    'select',   // pilih expr { kasus val -> ... lain -> ... } (pencocokan nilai)
+  'batas':    'timeout',  // tunggu expr batas N detik
+  'detik':    'second',   // satuan waktu untuk 'batas'
+  'dengan':   'with',     // dengan expr { field ... } — transformasi objek
+  'cocok':    'match',    // cocok expr { berhasil(n) => ... gagal(e) => ... } — pattern match hasil<T,E>
+  'ukur':     'measure',  // ukur "label" { ... } — cetak durasi eksekusi blok (observability)
 };
 
 // Maps type keyword → canonical internal type
 const TYPE_MAP = {
   'logika':  'bool',
-  'angka':   'number',
-  'bilangan':'number',  // integer — dialiaskan ke 'number' (belum ada tipe int terpisah)
-  'pecahan': 'number',  // float — dialiaskan ke 'number' (belum ada tipe float terpisah)
-  'byte':    'number',  // dialiaskan ke 'number'
+  'angka':   'number',  // numerik umum/generik — menerima bilangan, pecahan, byte
+  'bilangan':'int',     // harus bilangan bulat (divalidasi utk literal langsung)
+  'pecahan': 'float',   // menerima bilangan bulat maupun desimal
+  'byte':    'byte',    // bilangan bulat 0-255 (divalidasi utk literal langsung)
   'teks':    'string',
   'tiada':   'void',
-  'apapun':  'unknown', // escape hatch: any JS value, no type checking
+  'apa_saja':'unknown', // escape hatch: any JS value, no type checking (bisa warning dari linter)
   'larik':   'array',   // ditulis sebagai larik<T> — didesugar ke T[] oleh parser
   'peta':    'map',     // ditulis sebagai peta<K, V> — direpresentasikan sebagai objek JS biasa
+  // 'hasil' SENGAJA tidak masuk di sini — 'hasil' tetap bisa dipakai sebagai
+  // nama variabel biasa (kata umum). Sebagai tipe, 'hasil<T, E>' dikenali
+  // langsung dari kata sumbernya di consumeType() (lihat parser.js).
 };
 
 function detectGrammar(_source) {

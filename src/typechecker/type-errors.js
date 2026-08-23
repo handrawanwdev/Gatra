@@ -12,7 +12,10 @@ class TypeCheckError extends Error {
 // Display name for a type in the target grammar
 function displayType(type, isID) {
   if (!isID) return type;
-  const map = { number: 'angka', string: 'teks', bool: 'logika', void: 'tiada', unknown: 'tidak diketahui', null: 'kosong' };
+  const map = {
+    number: 'angka', string: 'teks', bool: 'logika', void: 'tiada', unknown: 'apa_saja', null: 'kosong',
+    int: 'bilangan', float: 'pecahan', byte: 'byte',
+  };
   if (type.endsWith('?'))  return displayType(type.slice(0, -1), isID) + '?';
   if (type.endsWith('[]')) return displayType(type.slice(0, -2), isID) + '[]';
   return map[type] || type;
@@ -136,10 +139,14 @@ function makeErrors(grammar) {
       return e('SyntaxError', msg, line, col);
     },
 
-    notAWorkerFn(name, line, col) {
+    invalidNumericLiteral(targetType, value, line, col) {
       const msg = isID
-        ? `${fn(name)} bukan fungsi pekerja — tandai dengan 'pekerja fungsi' agar bisa dipakai 'jalankan'`
-        : `${fn(name)} is not a worker function — mark it with 'pekerja fungsi' to use 'jalankan'`;
+        ? targetType === 'byte'
+          ? `Nilai '${value}' di luar jangkauan 'byte' (harus bilangan bulat 0-255)`
+          : `Nilai '${value}' bukan bilangan bulat — tidak valid untuk tipe 'bilangan'`
+        : targetType === 'byte'
+          ? `Value '${value}' is out of range for 'byte' (must be an integer 0-255)`
+          : `Value '${value}' is not an integer — invalid for type 'int'`;
       return e('TypeError', msg, line, col);
     },
 

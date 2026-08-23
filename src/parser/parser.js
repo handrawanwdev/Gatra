@@ -77,6 +77,18 @@ class Parser {
       base = `map<${key}, ${val}>`;
     }
 
+    // hasil<T, E>  →  tipe hasil<T,E> (dua varian: berhasil(T) / gagal(E))
+    // 'hasil' bukan kata kunci tipe — dicek dari kata sumbernya langsung
+    // supaya tetap bisa dipakai sebagai nama variabel biasa di posisi lain.
+    if (base === 'hasil' && this.check(T.LT)) {
+      this.advance(); // consume '<'
+      const ok  = this.consumeType('Expected ok type for hasil<T, E>');
+      this.consume(T.COMMA, undefined, "Expected ',' between types in hasil<T, E>");
+      const err = this.consumeType('Expected error type for hasil<T, E>');
+      this.consume(T.GT, undefined, "Expected '>' after hasil<T, E>");
+      base = `result<${ok}, ${err}>`;
+    }
+
     // Consume [] suffixes for array types
     while (this.check(T.LBRACKET)) {
       this.advance(); // consume [
@@ -108,6 +120,11 @@ class Parser {
   statement() {
     const tok = this.peek();
 
+    if (tok.type === T.JS_BLOCK) {
+      this.advance();
+      return { type: N.JS_BLOCK_STMT, code: tok.value, line: tok.line, col: tok.col };
+    }
+
     if (tok.type === T.KEYWORD) {
       switch (tok.value) {
         case 'let':     return this.varDecl();
@@ -129,19 +146,13 @@ class Parser {
         case 'import':  return this.packageImport();
         case 'export':  return this.exportDecl();
         case 'type':    return this.typeAliasDecl();
-        case 'match':   return this.matchStmt();
         case 'break':   return this.breakStmt();
         case 'continue':return this.continueStmt();
         case 'test':    return this.testDecl();
+        case 'measure': return this.measureStmt();
         case 'assert':  return this.assertStmt();
-        case 'worker':  return this.workerDecl();
-        case 'task':    return this.taskStmt();
-        case 'select':  return this.selectStmt();
-        case 'spawn':
-          // 'jalankan { ... } tunggu' (structured concurrency block) vs
-          // 'jalankan pekerjaFn(args)' (worker-spawn expression) — disambiguate on '{'
-          if (this.tokens[this.pos + 1]?.type === T.LBRACE) return this.structuredSpawnStmt();
-          break; // falls through to exprStmt() → unary() handles SPAWN_EXPR
+        case 'select':  return this.matchStmt();
+        case 'match':   return this.matchResultStmt();
       }
     }
 
@@ -231,9 +242,44 @@ class Parser {
     if (this.check(T.RPAREN)) return params;
 
     do {
+      // Rest parameter: ...nama — harus jadi parameter terakhir
+      if (this.check(T.ELLIPSIS)) {
+        this.advance();
+        const name = this.consume(T.IDENTIFIER, undefined, "Expected parameter name after '...'").value;
+        params.push({ name, type: 'unknown[]', default: null, rest: true });
+        break;
+      }
       const name = this.consume(T.IDENTIFIER, undefined, 'Expected parameter name').value;
       this.consume(T.COLON, undefined, "Expected ':' after parameter name");
       const paramType = this.consumeType('Expected parameter type');
+      let defaultVal = null;
+      if (this.matchToken(T.EQUALS)) {
+        defaultVal = this.expression();
+      }
+      params.push({ name, type: paramType, default: defaultVal });
+    } while (this.matchToken(T.COMMA));
+
+    return params;
+  }
+
+  // Parameter list for arrow functions — type annotation is optional
+  // (defaults to 'apa_saja'/unknown) since arrows are mainly terse callbacks.
+  paramListArrow() {
+    const params = [];
+    if (this.check(T.RPAREN)) return params;
+
+    do {
+      if (this.check(T.ELLIPSIS)) {
+        this.advance();
+        const name = this.consume(T.IDENTIFIER, undefined, "Expected parameter name after '...'").value;
+        params.push({ name, type: 'unknown[]', default: null, rest: true });
+        break;
+      }
+      const name = this.consume(T.IDENTIFIER, undefined, 'Expected parameter name').value;
+      let paramType = 'unknown';
+      if (this.matchToken(T.COLON)) {
+        paramType = this.consumeType('Expected parameter type');
+      }
       let defaultVal = null;
       if (this.matchToken(T.EQUALS)) {
         defaultVal = this.expression();
@@ -367,67 +413,27 @@ class Parser {
     return { type: N.TEST_DECL, label, body, line: tok.line, col: tok.col };
   }
 
+  measureStmt() {
+    const tok   = this.consume(T.KEYWORD, 'measure');
+    const label = this.consume(T.STRING, undefined, "Expected string label after 'ukur'").value;
+    const body  = this.block();
+    return { type: N.MEASURE_STMT, label, body, line: tok.line, col: tok.col };
+  }
+
   assertStmt() {
     const tok  = this.consume(T.KEYWORD, 'assert');
     const expr = this.expression();
     return { type: N.ASSERT_STMT, expr, line: tok.line, col: tok.col };
   }
 
-  workerDecl() {
-    this.consume(T.KEYWORD, 'worker');
-    if (!this.check(T.KEYWORD, 'fn')) {
-      const t = this.peek();
-      throw new ParseError("'pekerja' hanya berlaku untuk 'fungsi'", t.line, t.col);
-    }
-    const fn = this.fnDecl();
-    fn.isWorker = true;
-    return fn;
-  }
-
-  taskStmt() {
-    const tok  = this.consume(T.KEYWORD, 'task');
-    const expr = this.expression();
-    if (expr.type !== N.CALL_EXPR) {
-      throw new ParseError("'tugas' harus diikuti pemanggilan fungsi", tok.line, tok.col);
-    }
-    return { type: N.TASK_STMT, expr, line: tok.line, col: tok.col };
-  }
-
-  structuredSpawnStmt() {
-    const tok  = this.consume(T.KEYWORD, 'spawn');
-    const body = this.block();
-    this.consume(T.KEYWORD, 'await', "Expected 'tunggu' after 'jalankan { ... }'");
-    return { type: N.STRUCTURED_SPAWN, body, line: tok.line, col: tok.col };
-  }
-
-  selectStmt() {
-    const tok = this.consume(T.KEYWORD, 'select');
-    this.consume(T.LBRACE, undefined, "Expected '{' after 'pilih'");
-
-    const cases = [];
-    while (!this.check(T.RBRACE) && !this.isAtEnd()) {
-      this.consume(T.KEYWORD, 'case', "Expected 'kasus' in 'pilih'");
-      const channel = this.expression();
-      this.consume(T.ARROW, undefined, "Expected '->' after channel in 'pilih'");
-      const body = this.statement();
-      cases.push({ channel, body });
-    }
-
-    this.consume(T.RBRACE, undefined, "Expected '}' after 'pilih'");
-    if (cases.length === 0) {
-      throw new ParseError("'pilih' membutuhkan minimal satu 'kasus'", tok.line, tok.col);
-    }
-    return { type: N.SELECT_STMT, cases, line: tok.line, col: tok.col };
-  }
-
   matchStmt() {
-    const tok  = this.consume(T.KEYWORD, 'match');
+    const tok  = this.consume(T.KEYWORD, 'select'); // 'pilih'
     const prev = this.allowStructInit;
     this.allowStructInit = false;
     const discriminant = this.expression();
     this.allowStructInit = prev;
 
-    this.consume(T.LBRACE, undefined, "Expected '{' after 'cocok'");
+    this.consume(T.LBRACE, undefined, "Expected '{' after 'pilih'");
 
     const cases = [];
     let defaultCase = null;
@@ -445,12 +451,54 @@ class Parser {
         defaultCase = this.statement();
       } else {
         const t = this.peek();
-        throw new ParseError("Expected 'kasus' or 'lain' in 'cocok'", t.line, t.col);
+        throw new ParseError("Expected 'kasus' or 'lain' in 'pilih'", t.line, t.col);
+      }
+    }
+
+    this.consume(T.RBRACE, undefined, "Expected '}' after 'pilih'");
+    return { type: N.MATCH_STMT, discriminant, cases, defaultCase, line: tok.line, col: tok.col };
+  }
+
+  // cocok expr { berhasil(n) => stmt   gagal(e) => stmt }
+  // Pattern match khusus untuk hasil<T,E> (berhasil(v) / gagal(e)).
+  matchResultStmt() {
+    const tok  = this.consume(T.KEYWORD, 'match'); // 'cocok'
+    const prev = this.allowStructInit;
+    this.allowStructInit = false;
+    const discriminant = this.expression();
+    this.allowStructInit = prev;
+
+    this.consume(T.LBRACE, undefined, "Expected '{' after 'cocok'");
+
+    let okArm = null;
+    let errArm = null;
+
+    while (!this.check(T.RBRACE) && !this.isAtEnd()) {
+      const patTok = this.consume(T.IDENTIFIER, undefined, "Expected 'berhasil' or 'gagal' pattern in 'cocok'");
+      if (patTok.value !== 'berhasil' && patTok.value !== 'gagal') {
+        throw new ParseError("'cocok' hanya menerima pola 'berhasil(...)' atau 'gagal(...)'", patTok.line, patTok.col);
+      }
+      this.consume(T.LPAREN, undefined, `Expected '(' after '${patTok.value}'`);
+      const bindingTok = this.consume(T.IDENTIFIER, undefined, 'Expected binding name');
+      this.consume(T.RPAREN, undefined, "Expected ')'");
+      this.consume(T.FAT_ARROW, undefined, "Expected '=>'");
+      const body = this.statement();
+      const arm = { binding: bindingTok.value, body };
+
+      if (patTok.value === 'berhasil') {
+        if (okArm) throw new ParseError("Pola 'berhasil' hanya boleh muncul sekali dalam 'cocok'", patTok.line, patTok.col);
+        okArm = arm;
+      } else {
+        if (errArm) throw new ParseError("Pola 'gagal' hanya boleh muncul sekali dalam 'cocok'", patTok.line, patTok.col);
+        errArm = arm;
       }
     }
 
     this.consume(T.RBRACE, undefined, "Expected '}' after 'cocok'");
-    return { type: N.MATCH_STMT, discriminant, cases, defaultCase, line: tok.line, col: tok.col };
+    if (!okArm && !errArm) {
+      throw new ParseError("'cocok' membutuhkan minimal satu pola 'berhasil'/'gagal'", tok.line, tok.col);
+    }
+    return { type: N.MATCH_RESULT_STMT, discriminant, okArm, errArm, line: tok.line, col: tok.col };
   }
 
   tryStmt() {
@@ -496,6 +544,35 @@ class Parser {
 
     const body = this.block();
     return { type: N.FUNC_EXPR, params, returnType, body, isAsync, line: tok.line, col: tok.col };
+  }
+
+  // dengan X { id / nama = expr ... }   (spread=false, pick/rename ke objek baru)
+  // ubah X { nama = expr ... }          (spread=true,  { ...X, nama: expr, ... })
+  objectTransformExpr(spread) {
+    const tok = this.consume(T.KEYWORD, spread ? 'mut' : 'with');
+    const prevAllow = this.allowStructInit;
+    this.allowStructInit = false; // 'X {' di sini bukan inisialisasi struktur
+    const source = this.unary();
+    this.allowStructInit = prevAllow;
+
+    this.consume(T.LBRACE, undefined, `Expected '{' after '${spread ? 'ubah' : 'dengan'}'`);
+
+    const fields = [];
+    while (!this.check(T.RBRACE) && !this.isAtEnd()) {
+      const nameTok = this.consume(T.IDENTIFIER, undefined, 'Expected field name');
+      let value;
+      if (this.matchToken(T.EQUALS)) {
+        value = this.expression();
+      } else if (spread) {
+        throw new ParseError("Field di 'ubah' harus diisi lewat 'nama = ekspresi'", nameTok.line, nameTok.col);
+      } else {
+        value = { type: N.IDENTIFIER, name: nameTok.value, line: nameTok.line, col: nameTok.col };
+      }
+      fields.push({ name: nameTok.value, value });
+    }
+
+    this.consume(T.RBRACE, undefined, `Expected '}' after '${spread ? 'ubah' : 'dengan'}' block`);
+    return { type: N.OBJECT_TRANSFORM_EXPR, source, fields, spread, line: tok.line, col: tok.col };
   }
 
   returnStmt() {
@@ -557,7 +634,7 @@ class Parser {
 
     if (this.check(T.EQUALS)) {
       const tok = this.advance();
-      const validTargets = [N.IDENTIFIER, N.MEMBER_EXPR, N.DEREF_EXPR];
+      const validTargets = [N.IDENTIFIER, N.MEMBER_EXPR, N.INDEX_EXPR];
       if (!validTargets.includes(left.type)) {
         throw new ParseError('Invalid assignment target', tok.line, tok.col);
       }
@@ -586,10 +663,10 @@ class Parser {
   }
 
   ternary() {
-    const expr = this.logicalOr();
+    const expr = this.nullishCoalescing();
     if (this.isTernaryJika()) {
       const tok  = this.advance(); // consume 'if' (jika)
-      const cond = this.logicalOr();
+      const cond = this.nullishCoalescing();
       if (!this.check(T.KEYWORD, 'else')) {
         const t = this.peek();
         throw new ParseError("Expected 'lain' after ternary condition", t.line, t.col);
@@ -599,6 +676,17 @@ class Parser {
       return { type: N.TERNARY_EXPR, condition: cond, consequent: expr, alternate: alt, line: tok.line, col: tok.col };
     }
     return expr;
+  }
+
+  // Nullish coalescing: a ?? b  →  pakai b hanya jika a null/undefined
+  nullishCoalescing() {
+    let left = this.logicalOr();
+    while (this.check(T.QQ)) {
+      const tok   = this.advance();
+      const right = this.logicalOr();
+      left = { type: N.BINARY_EXPR, op: '??', left, right, line: tok.line, col: tok.col };
+    }
+    return left;
   }
 
   logicalOr() {
@@ -658,12 +746,6 @@ class Parser {
   multiplication() {
     let left = this.unary();
 
-    // BorrowExpr and StructInit are never valid multiplication operands.
-    // Stop here so that `&mut x *r = 1` or `Box { v: 1 } *r = 2` do not
-    // greedily consume `*r` as a binary multiply — `*r` must start the
-    // next statement.
-    if (left.type === N.BORROW_EXPR || left.type === N.STRUCT_INIT) return left;
-
     while (this.check(T.STAR) || this.check(T.SLASH)) {
       const op    = this.peek().value;
       const tok   = this.advance();
@@ -675,21 +757,20 @@ class Parser {
   }
 
   unary() {
-    // Await expression: tunggu expr
+    // Await expression: tunggu expr [batas N detik]
     if (this.check(T.KEYWORD, 'await')) {
       const tok  = this.advance();
       const expr = this.unary();
-      return { type: N.AWAIT_EXPR, expr, line: tok.line, col: tok.col };
-    }
 
-    // Worker spawn expression: jalankan pekerjaFn(args)
-    if (this.check(T.KEYWORD, 'spawn')) {
-      const tok  = this.advance();
-      const call = this.unary();
-      if (call.type !== N.CALL_EXPR) {
-        throw new ParseError("'jalankan' harus diikuti pemanggilan fungsi pekerja", tok.line, tok.col);
+      let timeoutMs = null;
+      if (this.check(T.KEYWORD, 'timeout')) {
+        this.advance();
+        const amount = this.consume(T.NUMBER, undefined, "Expected number after 'batas'");
+        this.consume(T.KEYWORD, 'second', "Expected 'detik' after timeout value");
+        timeoutMs = amount.value * 1000;
       }
-      return { type: N.SPAWN_EXPR, call, line: tok.line, col: tok.col };
+
+      return { type: N.AWAIT_EXPR, expr, timeoutMs, line: tok.line, col: tok.col };
     }
 
     // Logical NOT: !expr
@@ -704,23 +785,6 @@ class Parser {
       const tok     = this.advance();
       const operand = this.unary();
       return { type: N.UNARY_EXPR, op: '-', operand, line: tok.line, col: tok.col };
-    }
-
-    // Dereference: *r
-    if (this.check(T.STAR)) {
-      const tok  = this.advance();
-      // Must be followed by an identifier (the ref variable)
-      const name = this.consume(T.IDENTIFIER, undefined, "Expected identifier after '*'").value;
-      return { type: N.DEREF_EXPR, ref: name, line: tok.line, col: tok.col };
-    }
-
-    // Borrow: &x  or  &mut x
-    if (this.check(T.AMPERSAND)) {
-      const tok     = this.advance();
-      let mutable   = false;
-      if (this.check(T.KEYWORD, 'mut')) { this.advance(); mutable = true; }
-      const target  = this.consume(T.IDENTIFIER, undefined, "Expected identifier after '&'").value;
-      return { type: N.BORROW_EXPR, target, mutable, line: tok.line, col: tok.col };
     }
 
     return this.callExpr();
@@ -738,13 +802,52 @@ class Parser {
       } else if (this.check(T.DOT)) {
         const tok    = this.advance();
         const member = this.consume(T.IDENTIFIER, undefined, 'Expected member name after .').value;
-        expr = { type: N.MEMBER_EXPR, object: expr, member, line: tok.line, col: tok.col };
+        expr = { type: N.MEMBER_EXPR, object: expr, member, optional: false, line: tok.line, col: tok.col };
+      } else if (this.check(T.QDOT)) {
+        const tok    = this.advance();
+        const member = this.consume(T.IDENTIFIER, undefined, "Expected member name after '?.'").value;
+        expr = { type: N.MEMBER_EXPR, object: expr, member, optional: true, line: tok.line, col: tok.col };
+      } else if (this.check(T.LBRACKET)) {
+        const tok   = this.advance();
+        const index = this.expression();
+        this.consume(T.RBRACKET, undefined, "Expected ']' after index expression");
+        expr = { type: N.INDEX_EXPR, object: expr, index, line: tok.line, col: tok.col };
       } else {
         break;
       }
     }
 
     return expr;
+  }
+
+  // Lookahead from a '(' to see if the matching ')' is followed by '=>'
+  // (arrow function) rather than being a plain parenthesized expression.
+  isArrowFnAhead() {
+    let depth = 0;
+    for (let i = this.pos; i < this.tokens.length; i++) {
+      const t = this.tokens[i];
+      if (t.type === T.LPAREN) depth++;
+      else if (t.type === T.RPAREN) {
+        depth--;
+        if (depth === 0) return this.tokens[i + 1]?.type === T.FAT_ARROW;
+      } else if (t.type === T.EOF) return false;
+    }
+    return false;
+  }
+
+  // Arrow function: (params) => expr   or   (params) => { body }
+  arrowFnExpr() {
+    const tok = this.consume(T.LPAREN);
+    const params = this.paramListArrow();
+    this.consume(T.RPAREN, undefined, "Expected ')' after arrow function parameters");
+    this.consume(T.FAT_ARROW, undefined, "Expected '=>'");
+
+    if (this.check(T.LBRACE)) {
+      const body = this.block();
+      return { type: N.FUNC_EXPR, params, returnType: null, isAsync: false, isArrow: true, body, exprBody: null, line: tok.line, col: tok.col };
+    }
+    const exprBody = this.assignment();
+    return { type: N.FUNC_EXPR, params, returnType: null, isAsync: false, isArrow: true, body: null, exprBody, line: tok.line, col: tok.col };
   }
 
   primary() {
@@ -816,6 +919,16 @@ class Parser {
       return this.funcExpr();
     }
 
+    // dengan X { ... } — transformasi objek (tanpa spread, field baru saja)
+    if (tok.type === T.KEYWORD && tok.value === 'with') {
+      return this.objectTransformExpr(false);
+    }
+
+    // ubah X { field = expr ... } — pembaruan immutable ({ ...X, field: expr })
+    if (tok.type === T.KEYWORD && tok.value === 'mut') {
+      return this.objectTransformExpr(true);
+    }
+
     // print / cetak appearing in expression context (e.g. inside another call)
     if (tok.type === T.KEYWORD && tok.value === 'print') {
       this.advance();
@@ -842,6 +955,7 @@ class Parser {
     }
 
     if (tok.type === T.LPAREN) {
+      if (this.isArrowFnAhead()) return this.arrowFnExpr();
       this.advance();
       const expr = this.expression();
       this.consume(T.RPAREN, undefined, "Expected ')'");

@@ -1,0 +1,37 @@
+// 23_hasil_pattern_matching.gatra — hasil<T,E> + berhasil/gagal + 'cocok'
+//
+// 'hasil<T,E>' bukan generic asli (belum ada di Gatra) — dua varian bawaan:
+// berhasil(nilai) dan gagal(galat), dibongkar lewat 'cocok'.
+
+fungsi bagi(a: angka, b: angka): hasil<angka, teks> {
+  jika (b == 0) {
+    balik gagal("tidak dapat membagi dengan nol")
+  }
+  balik berhasil(a / b)
+}
+
+isi hasilBagus = bagi(10, 2)
+cocok hasilBagus {
+  berhasil(nilai) => cetak(nilai)
+  gagal(galat) => cetak(galat)
+}
+
+isi hasilBuruk = bagi(10, 0)
+cocok hasilBuruk {
+  berhasil(nilai) => cetak(nilai)
+  gagal(galat) => cetak(galat)
+}
+
+// 'cocok' boleh cuma satu pola kalau yang lain memang tidak relevan
+fungsi asinkron ambilData(): hasil<teks, teks> {
+  balik berhasil("data berhasil diambil")
+}
+
+fungsi asinkron utama(): tiada {
+  isi r = tunggu ambilData()
+  cocok r {
+    berhasil(data) => cetak(data)
+  }
+}
+
+utama()

@@ -1,0 +1,28 @@
+// 22_transformasi_objek.gatra — 'dengan' (transformasi) dan 'ubah' (pembaruan immutable)
+
+isi user = {
+  id: 1,
+  name: "Budi",
+  email: "budi@email.com",
+  status: "active"
+}
+
+// dengan X { ... } — bentuk objek baru dari X, field boleh diganti nama
+// dan dihitung ulang. Field yang tidak disebut TIDAK ikut ke hasil.
+isi pengguna = dengan user {
+  id
+  nama = name
+  email
+  aktif = status == "active"
+}
+cetak(pengguna)
+
+// ubah X { field = expr ... } — { ...X, field: expr, ... }
+// semua field asli tetap ada, cuma yang disebut yang berubah.
+isi profil = { nama: "Andi", umur: 20, kota: "Bandung" }
+isi profilBaru = ubah profil {
+  nama = "Budi"
+  umur = umur + 1
+}
+cetak(profil)
+cetak(profilBaru)

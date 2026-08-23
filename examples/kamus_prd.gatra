@@ -28,7 +28,7 @@ cetak(titik)
 
 // berhenti / lanjut — kontrol loop
 isi ubah total: angka = 0
-untuk i dalam 0..10 {
+untuk i dalam 0..100 {
   jika (i == 5) { berhenti }
   jika (i == 2) { lanjut }
   total = total + i
@@ -36,9 +36,9 @@ untuk i dalam 0..10 {
 cetak("total:")
 cetak(total)
 
-// cocok / kasus / lain — pencocokan nilai
+// pilih / kasus / lain — pencocokan nilai
 isi hari: angka = 3
-cocok hari {
+pilih hari {
   kasus 1 -> cetak("Senin")
   kasus 2 -> cetak("Selasa")
   kasus 3 -> cetak("Rabu")

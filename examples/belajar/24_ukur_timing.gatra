@@ -1,0 +1,20 @@
+// 24_ukur_timing.gatra — 'ukur "label" { ... }' — observability/timing
+//
+// Cetak durasi eksekusi blok ke konsol: "label: Nms". Tetap tercetak
+// walau blok 'balik' lebih awal atau melempar galat (dibungkus try/finally).
+
+fungsi asinkron prosesLambat(): tiada {
+  isi ubah t: angka = 0
+  untuk i dalam 0..10000000 {
+    t = t + 1
+  }
+}
+
+fungsi asinkron utama(): tiada {
+  ukur "proses lambat" {
+    tunggu prosesLambat()
+  }
+  cetak("selesai")
+}
+
+utama()

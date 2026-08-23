@@ -1,4 +1,4 @@
-// 05_kontrol_alur.gatra — jika/lain/lain jika, dan cocok/kasus/lain
+// 05_kontrol_alur.gatra — jika/lain/lain jika, dan pilih/kasus/lain
 
 isi nilai = 75
 
@@ -12,10 +12,10 @@ jika (nilai >= 90) {
   cetak("D")
 }
 
-// 'cocok' — pencocokan nilai (mirip switch), kompile ke if/else if/else
+// 'pilih' dengan ekspresi — pencocokan nilai (mirip switch), kompile ke if/else if/else
 isi hari = 3
 
-cocok hari {
+pilih hari {
   kasus 1 -> cetak("Senin")
   kasus 2 -> cetak("Selasa")
   kasus 3 -> cetak("Rabu")
@@ -24,10 +24,10 @@ cocok hari {
   lain -> cetak("Akhir pekan")
 }
 
-// 'cocok' juga bisa mencocokkan teks
+// 'pilih' juga bisa mencocokkan teks
 isi peran = "admin"
 
-cocok peran {
+pilih peran {
   kasus "admin" -> cetak("Akses penuh")
   kasus "editor" -> cetak("Akses edit")
   lain -> cetak("Akses terbatas")

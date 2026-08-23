@@ -2,93 +2,48 @@
 
 const { NodeType: N } = require('../ast/nodes');
 
-// Runtime primitives for pustaka/sinkronisasi (kunci/saluran).
-// Both are async-task-level primitives (Promise-based) — they serialize
-// concurrent 'fungsi asinkron' work on Node's single event loop; they are
-// not OS threads (that is 'pekerja' / Worker Threads, a separate feature).
-const KUNCI_PRELUDE = `function __gatra_kunci() {
-  let __terkunci = false;
-  const __antrean = [];
-  return {
-    kunci() {
-      return new Promise((selesai) => {
-        if (!__terkunci) { __terkunci = true; selesai(); }
-        else __antrean.push(selesai);
-      });
-    },
-    buka() {
-      if (__antrean.length > 0) __antrean.shift()();
-      else __terkunci = false;
-    },
-  };
+// tunggu expr batas N detik — Promise.race antara expr dan timer yang me-reject.
+const BATAS_PRELUDE = `function __gatra_batas(ms) {
+  return new Promise((_, tolak) => setTimeout(() => tolak(new Error('Timeout')), ms));
 }`;
 
-const SALURAN_PRELUDE = `function __gatra_saluran() {
-  const __bufer = [];
-  const __penunggu = [];
-  return {
-    kirim(nilai) {
-      if (__penunggu.length > 0) __penunggu.shift()(nilai);
-      else __bufer.push(nilai);
-    },
-    terima() {
-      if (__bufer.length > 0) return Promise.resolve(__bufer.shift());
-      return new Promise((selesai) => __penunggu.push(selesai));
-    },
-  };
-}`;
-
-// Recursively scans an AST (or any plain object/array) for a zero-arg call
-// to the given builtin name — e.g. isUsed(ast, 'kunci') for `kunci()`.
-function usesBuiltinCall(node, name) {
+// Recursively scans an AST (or any plain object/array) for an AWAIT_EXPR
+// that uses 'batas' (timeoutMs set) — only then is the prelude needed.
+function usesTimeout(node) {
   if (!node || typeof node !== 'object') return false;
-  if (Array.isArray(node)) return node.some(n => usesBuiltinCall(n, name));
+  if (Array.isArray(node)) return node.some(usesTimeout);
+  if (node.type === N.AWAIT_EXPR && node.timeoutMs != null) return true;
+  return Object.keys(node).some(k => k !== 'type' && usesTimeout(node[k]));
+}
+
+// hasil<T,E> — berhasil(v)/gagal(e) hanya membungkus nilainya dengan tag,
+// dibongkar lewat 'cocok'.
+const HASIL_PRELUDE = `function __gatra_berhasil(nilai) { return { __tag: 'berhasil', nilai }; }
+function __gatra_gagal(galat) { return { __tag: 'gagal', galat }; }`;
+
+// Recursively scans an AST (or any plain object/array) for a zero/one-arg
+// call to 'berhasil'/'gagal' (identifier callee) — only then is the
+// hasil<T,E> prelude needed.
+function usesHasil(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) return node.some(usesHasil);
   if (node.type === N.CALL_EXPR && typeof node.callee === 'object' &&
-      node.callee.type === N.IDENTIFIER && node.callee.name === name) {
+      node.callee.type === N.IDENTIFIER && (node.callee.name === 'berhasil' || node.callee.name === 'gagal')) {
     return true;
   }
-  return Object.keys(node).some(k => k !== 'type' && usesBuiltinCall(node[k], name));
+  if (node.type === N.MATCH_RESULT_STMT) return true;
+  return Object.keys(node).some(k => k !== 'type' && usesHasil(node[k]));
 }
-
-// Recursively scans an AST (or any plain object/array) for any node of the given type.
-function usesNodeType(node, type) {
-  if (!node || typeof node !== 'object') return false;
-  if (Array.isArray(node)) return node.some(n => usesNodeType(n, type));
-  if (node.type === type) return true;
-  return Object.keys(node).some(k => k !== 'type' && usesNodeType(node[k], type));
-}
-
-// pekerja/jalankan — spawns a real OS thread (Node worker_threads) to run a
-// self-contained (closure-free) function, serialized via .toString(). This
-// is genuine parallelism, unlike kunci/saluran which are async-task-level.
-const JALANKAN_PRELUDE = `function __gatra_jalankan(__gatra_fn, __gatra_args) {
-  const { Worker } = require('worker_threads');
-  return new Promise((selesai, tolak) => {
-    const __gatra_kode =
-      'const { parentPort } = require("worker_threads");' +
-      'const __fn = (' + __gatra_fn.toString() + ');' +
-      'Promise.resolve(__fn(...' + JSON.stringify(__gatra_args) + ')).then(' +
-      '  (hasil) => parentPort.postMessage({ ok: true, hasil }),' +
-      '  (galat) => parentPort.postMessage({ ok: false, galat: String(galat) })' +
-      ');';
-    const __gatra_w = new Worker(__gatra_kode, { eval: true });
-    __gatra_w.on('message', (pesan) => {
-      __gatra_w.terminate();
-      if (pesan.ok) selesai(pesan.hasil); else tolak(new Error(pesan.galat));
-    });
-    __gatra_w.on('error', tolak);
-  });
-}`;
 
 class CodeGenerator {
   constructor(opts = {}) {
-    this.depth          = 0;
-    this.isPackage       = false; // true when a PackageDeclaration is present
-    this.borrowMap       = new Map(); // refName → originalVarName (for deref-assign)
-    this.matchCounter    = 0;
-    this.spawnCounter    = 0;
-    this.taskCollectors  = []; // stack of array-var names for enclosing 'jalankan { } tunggu' blocks
-    this.includeTests    = !!opts.includeTests; // 'gatra uji' compiles with tests active
+    this.depth        = 0;
+    this.isPackage     = false; // true when a PackageDeclaration is present
+    this.matchCounter  = 0;
+    this.measureCounter = 0;
+    this.withCounter   = 0;
+    this.withStack     = []; // active 'dengan'/'ubah' IIFE param names — innermost last
+    this.includeTests  = !!opts.includeTests; // 'gatra uji' compiles with tests active
   }
 
   ind() { return '  '.repeat(this.depth); }
@@ -113,14 +68,14 @@ class CodeGenerator {
       case N.UNARY_EXPR:     return this.genUnaryExpr(node);
       case N.CALL_EXPR:      return this.genCallExpr(node);
       case N.MEMBER_EXPR:    return this.genMemberExpr(node);
+      case N.INDEX_EXPR:     return this.genIndexExpr(node);
       case N.STRUCT_INIT:    return this.genStructInit(node);
       case N.ARRAY_LITERAL:  return this.genArrayLiteral(node);
-      case N.BORROW_EXPR:    return this.genBorrowExpr(node);
-      case N.DEREF_EXPR:     return this.genDerefExpr(node);
       case N.AWAIT_EXPR:     return this.genAwaitExpr(node);
       case N.FUNC_EXPR:      return this.genFuncExpr(node);
       case N.NULL_LITERAL:      return 'null';
       case N.OBJECT_LITERAL:    return this.genObjectLiteral(node);
+      case N.OBJECT_TRANSFORM_EXPR: return this.genObjectTransformExpr(node);
       case N.TEMPLATE_EXPR:     return this.genTemplateExpr(node);
       case N.DESTRUCTURE_DECL:  return this.genDestructureDecl(node);
       case N.SPREAD_ELEMENT:    return this.genSpreadElement(node);
@@ -129,13 +84,14 @@ class CodeGenerator {
       case N.CONTINUE_STMT:     return 'continue';
       case N.TYPE_ALIAS_DECL:   return ''; // metadata — no JS output
       case N.MATCH_STMT:        return this.genMatchStmt(node);
+      case N.MATCH_RESULT_STMT: return this.genMatchResultStmt(node);
       case N.TEST_DECL:         return this.genTestDecl(node);
+      case N.MEASURE_STMT:      return this.genMeasureStmt(node);
       case N.ASSERT_STMT:       return this.genAssertStmt(node);
-      case N.SPAWN_EXPR:        return this.genSpawnExpr(node);
-      case N.TASK_STMT:         return this.genTaskStmt(node);
-      case N.STRUCTURED_SPAWN:  return this.genStructuredSpawn(node);
-      case N.SELECT_STMT:       return this.genSelectStmt(node);
-      case N.IDENTIFIER:     return node.name;
+      case N.JS_BLOCK_STMT:     return node.code.trim();
+      case N.IDENTIFIER:
+        if (this.withStack.length > 0) return `${this.withStack[this.withStack.length - 1]}.${node.name}`;
+        return node.name;
       case N.NUMBER_LITERAL: return String(node.value);
       case N.STRING_LITERAL: return JSON.stringify(node.value);
       case N.BOOL_LITERAL:   return String(node.value);
@@ -151,13 +107,8 @@ class CodeGenerator {
 
     const lines = [];
 
-    // Runtime prelude: only emitted when kunci()/saluran() are actually called
-    const needsKunci    = usesBuiltinCall(node, 'kunci');
-    const needsSaluran  = usesBuiltinCall(node, 'saluran');
-    const needsJalankan = usesNodeType(node, N.SPAWN_EXPR);
-    if (needsKunci)    lines.push(KUNCI_PRELUDE);
-    if (needsSaluran)  lines.push(SALURAN_PRELUDE);
-    if (needsJalankan) lines.push(JALANKAN_PRELUDE);
+    if (usesTimeout(node)) lines.push(BATAS_PRELUDE);
+    if (usesHasil(node)) lines.push(HASIL_PRELUDE);
 
     // Emit all imports first (before functions/vars)
     for (const stmt of node.body) {
@@ -218,10 +169,11 @@ class CodeGenerator {
       case N.WHILE_STMT:
       case N.TRY_STMT:
       case N.MATCH_STMT:
+      case N.MATCH_RESULT_STMT:
       case N.TEST_DECL:
+      case N.MEASURE_STMT:
       case N.ASSERT_STMT:
-      case N.STRUCTURED_SPAWN:
-      case N.SELECT_STMT:
+      case N.JS_BLOCK_STMT:
         return ind + this.generate(node);
       default:
         return ind + this.generate(node) + ';';
@@ -238,10 +190,11 @@ class CodeGenerator {
       case N.WHILE_STMT:
       case N.TRY_STMT:
       case N.MATCH_STMT:
+      case N.MATCH_RESULT_STMT:
       case N.TEST_DECL:
+      case N.MEASURE_STMT:
       case N.ASSERT_STMT:
-      case N.STRUCTURED_SPAWN:
-      case N.SELECT_STMT:
+      case N.JS_BLOCK_STMT:
         return ind + this.generate(node);
       default:
         return ind + this.generate(node) + ';';
@@ -249,30 +202,59 @@ class CodeGenerator {
   }
 
   genVarDecl(node) {
-    // Track borrow targets so deref-assign can resolve original variable
-    if (node._borrowTarget) {
-      this.borrowMap.set(node.name, node._borrowTarget);
-    }
-    const keyword = node.mutable ? 'let' : 'let';
-    return `${keyword} ${node.name} = ${this.generate(node.value)}`;
+    return `let ${node.name} = ${this.generate(node.value)}`;
+  }
+
+  genParams(params) {
+    return params.map(p => {
+      if (p.rest) return `...${p.name}`;
+      return p.default ? `${p.name} = ${this.generate(p.default)}` : p.name;
+    }).join(', ');
   }
 
   genFnDecl(node) {
     const async_ = node.isAsync ? 'async ' : '';
-    const params = node.params.map(p => p.default ? `${p.name} = ${this.generate(p.default)}` : p.name).join(', ');
+    const params = this.genParams(node.params);
     const body   = this.genBlockBody(node.body);
     return `${async_}function ${node.name}(${params}) {\n${body}\n${this.ind()}}`;
   }
 
   genAwaitExpr(node) {
+    if (node.timeoutMs != null) {
+      return `await Promise.race([${this.generate(node.expr)}, __gatra_batas(${node.timeoutMs})])`;
+    }
     return `await ${this.generate(node.expr)}`;
   }
 
   genFuncExpr(node) {
-    const async_ = node.isAsync ? 'async ' : '';
-    const params  = node.params.map(p => p.default ? `${p.name} = ${this.generate(p.default)}` : p.name).join(', ');
-    const body    = this.genBlockBody(node.body);
-    return `${async_}function(${params}) {\n${body}\n${this.ind()}}`;
+    // A nested function/arrow has its own scope — don't rewrite its own
+    // identifiers against an enclosing 'dengan'/'ubah' source.
+    const savedWithStack = this.withStack;
+    this.withStack = [];
+
+    const params = this.genParams(node.params);
+    let out;
+    if (node.isArrow) {
+      out = node.exprBody
+        ? `(${params}) => (${this.generate(node.exprBody)})`
+        : `(${params}) => {\n${this.genBlockBody(node.body)}\n${this.ind()}}`;
+    } else {
+      const async_ = node.isAsync ? 'async ' : '';
+      out = `${async_}function(${params}) {\n${this.genBlockBody(node.body)}\n${this.ind()}}`;
+    }
+
+    this.withStack = savedWithStack;
+    return out;
+  }
+
+  genObjectTransformExpr(node) {
+    const sourceJs = this.generate(node.source); // resolved in the OUTER with-context
+    const param = `__dengan${this.withCounter++}`;
+    this.withStack.push(param);
+    const props = node.fields.map(f => `${f.name}: ${this.generate(f.value)}`).join(', ');
+    this.withStack.pop();
+    const spread = node.spread ? `...${param}, ` : '';
+    return `((${param}) => ({ ${spread}${props} }))(${sourceJs})`;
   }
 
   genTryStmt(node) {
@@ -355,12 +337,6 @@ class CodeGenerator {
   // ── Expressions ─────────────────────────────────────────────────────────────
 
   genAssignExpr(node) {
-    // *r = value  →  resolve original var via borrow map and assign to it
-    if (node.target.type === N.DEREF_EXPR) {
-      const refName  = node.target.ref;
-      const original = this.borrowMap.get(refName) || refName;
-      return `${original} = ${this.generate(node.value)}`;
-    }
     return `${this.generate(node.target)} = ${this.generate(node.value)}`;
   }
 
@@ -377,12 +353,12 @@ class CodeGenerator {
   genCallExpr(node) {
     const args = node.args.map(a => this.generate(a)).join(', ');
 
-    // Built-in kunci()/saluran() factory calls — rewritten to a mangled
-    // runtime name so they never collide with a user variable that shadows
-    // the same surface name (e.g. `isi kunci = kunci()`).
+    // Built-in hasil<T,E> constructors — checked on the raw callee (before
+    // any 'dengan'/'ubah' identifier rewriting) so `berhasil(x)` always
+    // means the constructor, never a with-source member.
     if (typeof node.callee === 'object' && node.callee.type === N.IDENTIFIER) {
-      if (node.callee.name === 'kunci')   return `__gatra_kunci(${args})`;
-      if (node.callee.name === 'saluran') return `__gatra_saluran(${args})`;
+      if (node.callee.name === 'berhasil') return `__gatra_berhasil(${args})`;
+      if (node.callee.name === 'gagal')    return `__gatra_gagal(${args})`;
     }
 
     // Resolve callee
@@ -402,7 +378,12 @@ class CodeGenerator {
   }
 
   genMemberExpr(node) {
-    return `${this.generate(node.object)}.${node.member}`;
+    const op = node.optional ? '?.' : '.';
+    return `${this.generate(node.object)}${op}${node.member}`;
+  }
+
+  genIndexExpr(node) {
+    return `${this.generate(node.object)}[${this.generate(node.index)}]`;
   }
 
   genStructInit(node) {
@@ -446,47 +427,20 @@ class CodeGenerator {
     return `...${this.generate(node.value)}`;
   }
 
-  genSpawnExpr(node) {
-    const callee = this.generate(node.call.callee);
-    const args   = node.call.args.map(a => this.generate(a)).join(', ');
-    return `__gatra_jalankan(${callee}, [${args}])`;
-  }
-
-  genTaskStmt(node) {
-    const exprJs = this.generate(node.expr);
-    if (this.taskCollectors.length > 0) {
-      const arr = this.taskCollectors[this.taskCollectors.length - 1];
-      return `${arr}.push(${exprJs})`;
-    }
-    return exprJs;
-  }
-
-  genStructuredSpawn(node) {
-    const arr = `__gatra_tugas${this.spawnCounter++}`;
-    this.taskCollectors.push(arr);
-    this.depth++;
-    const declLine = `${this.ind()}const ${arr} = [];`;
-    const bodyLines = node.body.body.map(s => this.genBlockStmt(s)).join('\n');
-    const waitLine = `${this.ind()}await Promise.all(${arr});`;
-    this.depth--;
-    this.taskCollectors.pop();
-    return `{\n${declLine}\n${bodyLines}\n${waitLine}\n${this.ind()}}`;
-  }
-
-  genSelectStmt(node) {
-    const arms = node.cases.map(c => {
-      const chan = this.generate(c.channel);
-      this.depth++;
-      const bodyLine = this.genBlockStmt(c.body);
-      this.depth--;
-      return `${chan}.terima().then(() => {\n${bodyLine}\n${this.ind()}})`;
-    });
-    return `await Promise.race([${arms.join(', ')}]);`;
-  }
-
   genTestDecl(node) {
     const body = this.genBlockBody(node.body);
     return `__gatra_uji_daftar.push([${JSON.stringify(node.label)}, async () => {\n${body}\n${this.ind()}}]);`;
+  }
+
+  genMeasureStmt(node) {
+    const tmp = `__ukur${this.measureCounter++}`;
+    this.depth++;
+    const ind1     = this.ind();
+    const startLine = `${ind1}const ${tmp} = performance.now();`;
+    const tryBody   = this.genBlockBody(node.body);
+    const finallyLine = `${ind1}  console.log(${JSON.stringify(node.label)} + ': ' + Math.round(performance.now() - ${tmp}) + 'ms');`;
+    this.depth--;
+    return `{\n${startLine}\n${ind1}try {\n${tryBody}\n${ind1}} finally {\n${finallyLine}\n${ind1}}\n${this.ind()}}`;
   }
 
   genAssertStmt(node) {
@@ -518,20 +472,32 @@ class CodeGenerator {
     return out.trimEnd();
   }
 
+  genMatchResultStmt(node) {
+    const tmp  = `__cocok${this.matchCounter++}`;
+    const disc = this.generate(node.discriminant);
+    let out = `const ${tmp} = ${disc};\n${this.ind()}`;
+
+    const parts = [];
+    if (node.okArm) {
+      this.depth++;
+      const bindLine = `${this.ind()}const ${node.okArm.binding} = ${tmp}.nilai;`;
+      const bodyLine = this.genBlockStmt(node.okArm.body);
+      this.depth--;
+      parts.push(`if (${tmp}.__tag === 'berhasil') {\n${bindLine}\n${bodyLine}\n${this.ind()}}`);
+    }
+    if (node.errArm) {
+      this.depth++;
+      const bindLine = `${this.ind()}const ${node.errArm.binding} = ${tmp}.galat;`;
+      const bodyLine = this.genBlockStmt(node.errArm.body);
+      this.depth--;
+      parts.push(`if (${tmp}.__tag === 'gagal') {\n${bindLine}\n${bodyLine}\n${this.ind()}}`);
+    }
+
+    return out + parts.join(' ');
+  }
+
   genTernaryExpr(node) {
     return `(${this.generate(node.condition)} ? ${this.generate(node.consequent)} : ${this.generate(node.alternate)})`;
-  }
-
-  // &x  →  x  (borrow is invisible in JS output — ownership is compile-time only)
-  genBorrowExpr(node) {
-    return node.target;
-  }
-
-  // *r  →  r  (dereference is invisible in JS for reads — JS refs handle it)
-  genDerefExpr(node) {
-    // For read access: just emit the ref variable name
-    // Write access (*r = v) is handled in genAssignExpr via borrowMap
-    return node.ref;
   }
 }
 
