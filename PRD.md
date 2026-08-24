@@ -1,5 +1,3 @@
-# 📘 PRODUCT REQUIREMENTS DOCUMENT (PRD)
-
 # GATRA v0.1
 
 ### **Bahasa Pemrograman Indonesia Sederhana untuk Ekosistem JavaScript**
