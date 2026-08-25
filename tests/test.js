@@ -423,7 +423,7 @@ run('accepts member access on valid struct field', () => {
 
 run('rejects assignment of wrong type', () => {
   assertThrows(
-    () => tc('isi x: angka = 10 x = "salah"'),
+    () => tc('isi ubah x: angka = 10 x = "salah"'),
     'Diharapkan'
   );
 });
@@ -2664,8 +2664,8 @@ run("executes: a 'paralel' fn escalated to the worker pool still returns correct
   withTmpDir((dir) => {
     const result = runParallelProgram(`
       fungsi paralel jumlahkan(n: angka): angka {
-        isi total = 0
-        isi i = 0
+        isi ubah total = 0
+        isi ubah i = 0
         selama i < n {
           total = total + i
           i = i + 1
@@ -2673,7 +2673,7 @@ run("executes: a 'paralel' fn escalated to the worker pool still returns correct
         balik total
       }
       fungsi asinkron utama(): tiada {
-        isi i = 0
+        isi ubah i = 0
         selama i < 5 {
           isi h = tunggu jumlahkan(20000000)
           cetak(h)
@@ -2734,7 +2734,7 @@ run('typechecker: reassigning a moved variable clears the move (fresh ownership)
   tc(`struktur Data { nilai: angka }
   fungsi paralel proses(d: Data): angka { balik d.nilai }
   fungsi asinkron utama(): tiada {
-    isi data = Data { nilai: 5 }
+    isi ubah data = Data { nilai: 5 }
     tunggu proses(data)
     data = Data { nilai: 10 }
     cetak(data)
@@ -2961,7 +2961,181 @@ run("explain: a 'fungsi paralel' is classified parallelizable with the Worker Po
   assertEqual(fn.strategy, 'Worker Pool (paralel)');
 });
 
+console.log('\n── Konversi tipe (ke_teks/ke_angka/dst) ─────────────────────────');
+
+run('typechecker: ke_teks(...) returns teks, ke_angka(...) returns angka', () => {
+  tc('isi a: teks = ke_teks(42)\nisi b: angka = ke_angka("3.5")');
+});
+
+run('typechecker: ke_bilangan/ke_pecahan/ke_byte/ke_logika return the matching type', () => {
+  tc('isi a: bilangan = ke_bilangan(9.9)\nisi b: pecahan = ke_pecahan("2.25")\nisi c: byte = ke_byte(300)\nisi d: logika = ke_logika("benar")');
+});
+
+run('typechecker: konversi builtin can be shadowed by a user declaration', () => {
+  tc('fungsi ke_teks(x: angka): angka { balik x }\nisi a: angka = ke_teks(1)');
+});
+
+run('codegen: ke_teks/ke_angka compile to __gatra_ke_* helper calls plus prelude', () => {
+  const js = compile('isi a: teks = ke_teks(42)\nisi b: angka = ke_angka("3.5")');
+  assert(js.includes('__gatra_ke_teks(42)'), js);
+  assert(js.includes('__gatra_ke_angka("3.5")'), js);
+  assert(js.includes('function __gatra_ke_teks('), js);
+});
+
+run('codegen: konversi prelude is omitted when no konversi call is used', () => {
+  const js = compile('cetak(42)');
+  assert(!js.includes('__gatra_ke_teks'), js);
+});
+
+run('executes: ke_teks/ke_angka/ke_bilangan/ke_pecahan round-trip correctly', () => {
+  const out = exec('cetak(ke_teks(42))\ncetak(ke_angka("3.5") + 1)\ncetak(ke_bilangan(9.9))\ncetak(ke_pecahan("2.25"))');
+  assertEqual(out[0], '42');
+  assertEqual(out[1], '4.5');
+  assertEqual(out[2], '9');
+  assertEqual(out[3], '2.25');
+});
+
+run('executes: ke_byte wraps out-of-range values into 0-255 (mod 256)', () => {
+  const out = exec('cetak(ke_byte(300))\ncetak(ke_byte(-1))');
+  assertEqual(out[0], '44');
+  assertEqual(out[1], '255');
+});
+
+run('executes: ke_logika treats only the exact string "benar" as true', () => {
+  const out = exec('cetak(ke_logika("benar"))\ncetak(ke_logika("salah"))\ncetak(ke_logika(0))\ncetak(ke_logika(1))');
+  assertEqual(out[0], 'true');
+  assertEqual(out[1], 'false');
+  assertEqual(out[2], 'false');
+  assertEqual(out[3], 'true');
+});
+
+console.log('\n── Concurrency Safety gap fixes (usecase-concurrency.md) ────────');
+
+run("typechecker: 'tanpa_periksa(x)' now actually works as the closure-capture escape hatch it's documented as (UC-13)", () => {
+  // Before the fix, unsafeClosureCapture's own error message told the
+  // developer to wrap the read in tanpa_periksa(...), but inferIdentifier's
+  // check ran unconditionally — the advice was a lie and this always threw.
+  tc(`isi counter = 0
+  fungsi paralel proses(): angka {
+    balik tanpa_periksa(counter)
+  }`);
+});
+
+run("typechecker: closure capture is still rejected for a real (non-tanpa_periksa) outer-var read (UC-13 blanket rule intact)", () => {
+  assertThrows(
+    () => tc('isi counter = 0\nfungsi paralel proses(): angka {\n  balik counter\n}'),
+    'dari luar tidak boleh dipakai'
+  );
+});
+
+run("typechecker: 'tanpa_periksa(...)' still only suppresses closure-capture inside its own argument, not the rest of the fn body (UC-13)", () => {
+  assertThrows(
+    () => tc(`isi counter = 0
+    fungsi paralel proses(): angka {
+      cetak(tanpa_periksa(counter))
+      balik counter
+    }`),
+    'dari luar tidak boleh dipakai'
+  );
+});
+
+console.log('\n── Scheduler: worker crash recovery (UC-11) ──────────────────────');
+
+// UC-11's acceptance criteria include "Queue/state dapat dipulihkan" — before
+// the fix, the pool's 'error' handler (a real worker-thread crash, distinct
+// from a normal thrown business error which is already relayed fine via a
+// {ok:false} message) never called drainQueue(), so anything already sitting
+// in pool.queue behind the crashed worker would wait forever for a worker
+// that no longer exists — a real, hangs-forever queue-stall, not just a
+// missed optimization. Forcing MAX_WORKERS=1 (via a mocked os.cpus()) makes
+// this fully deterministic: the single worker crashes mid-task, and the one
+// task queued behind it has nothing else that could ever have freed it up.
+//
+// This needs real worker_threads + real async timing, which the file's
+// synchronous run() harness can't wait on (see 'executes async/await
+// end-to-end' above — those only check compiled JS text for the same
+// reason) — so this one test manages its own passed/failed bookkeeping and
+// the file's final summary waits on __pendingAsyncTests before printing.
+const __pendingAsyncTests = [];
+function runAsync(label, fn) {
+  __pendingAsyncTests.push(
+    Promise.resolve().then(fn).then(
+      () => { console.log(`  ✓ ${label}`); passed++; },
+      (err) => { console.log(`  ✗ ${label}`); console.log(`    ${err.message}`); failed++; },
+    ),
+  );
+}
+
+runAsync("scheduler: a worker crash while a task is queued behind it no longer strands that task forever (UC-11)", async () => {
+  const realCpus = os.cpus;
+  os.cpus = () => [{}]; // force MAX_WORKERS = 1
+  delete require.cache[require.resolve('../src/runtime/scheduler')];
+  let scheduler;
+  try {
+    scheduler = require('../src/runtime/scheduler');
+  } finally {
+    os.cpus = realCpus; // restore immediately — nothing else in this file should see the mock
+  }
+  assertEqual(scheduler.MAX_WORKERS, 1);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatra_crash_'));
+  try {
+    // A hand-written worker module (not compiled Gatra) implementing the
+    // same {id, fn, args} -> {id, ok, value|error} protocol codegen's
+    // genParallelGuard emits — 'crash' deliberately throws OUTSIDE the
+    // message handler's own try/catch (fire-and-forget via setImmediate),
+    // which is what a genuine uncaught worker-thread crash looks like, as
+    // opposed to the function's own thrown/rejected error (already handled
+    // fine by the ok:false message path, no crash involved at all).
+    const workerPath = path.join(dir, 'worker.js');
+    fs.writeFileSync(workerPath, `
+      const { parentPort } = require('worker_threads');
+      const fns = {
+        tugas(x) {
+          if (x === 'crash') {
+            setImmediate(() => { throw new Error('sengaja crash utk uji UC-11'); });
+            return new Promise(() => {});
+          }
+          return x;
+        }
+      };
+      parentPort.on('message', async (msg) => {
+        try {
+          const value = await fns[msg.fn](...msg.args);
+          parentPort.postMessage({ id: msg.id, ok: true, value });
+        } catch (e) {
+          parentPort.postMessage({ id: msg.id, ok: false, error: String(e && e.message || e) });
+        }
+      });
+    `, 'utf8');
+
+    const crashPromise = scheduler._internals.dispatchToWorker(workerPath, 'tugas', ['crash']);
+    crashPromise.catch(() => {}); // expected to reject — not what's under test
+    // Fired immediately after: with MAX_WORKERS=1 and the sole worker
+    // already claimed by the crashing task above, this lands in pool.queue.
+    const queuedPromise = scheduler._internals.dispatchToWorker(workerPath, 'tugas', ['selamat']);
+
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error('timeout: queued task never recovered after the crash — UC-11 regression')),
+        5000,
+      );
+    });
+    try {
+      assertEqual(await Promise.race([queuedPromise, timeout]), 'selamat');
+    } finally {
+      clearTimeout(timer); // don't leave the loser timer dangling — it'd hold the process open for 5s on success
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    delete require.cache[require.resolve('../src/runtime/scheduler')];
+  }
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
-console.log(`\nResults: ${passed} passed, ${failed} failed`);
-if (failed > 0) process.exit(1);
+Promise.all(__pendingAsyncTests).then(() => {
+  console.log(`\nResults: ${passed} passed, ${failed} failed`);
+  if (failed > 0) process.exit(1);
+});

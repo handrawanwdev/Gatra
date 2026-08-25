@@ -170,7 +170,7 @@ fungsi asinkron utama(): tiada {
   // Percobaan 4-6: panggilan berulang biar scheduler 'membuktikan'
   // verifikasiKataSandi mahal dan panggilan berikutnya otomatis lompat ke
   // Worker Pool (bandingkan waktu percobaan pertama vs yang belakangan).
-  isi i = 0
+  isi ubah i = 0
   selama i < 3 {
     ukur "login percobaan berulang" {
       isi hasil = tunggu controller.login(LoginDto { email: "budi@contoh.id", kataSandi: "RahasiaAman123" })

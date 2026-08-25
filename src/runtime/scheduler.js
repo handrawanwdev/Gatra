@@ -100,7 +100,7 @@ function spawnWorker(modulePath, pool) {
     // nothing else (including any in-flight 'jalankan' await) is keeping it
     // alive. runTask() ref()s it right back the moment it's given new work.
     worker.unref();
-    drainQueue(pool);
+    drainQueue(modulePath, pool);
     if (!task) return;
     if (msg.ok) task.resolve(msg.value);
     else task.reject(new Error(msg.error));
@@ -114,6 +114,14 @@ function spawnWorker(modulePath, pool) {
     }
     pool.workers = pool.workers.filter(w => w !== worker);
     pool.free = pool.free.filter(w => w !== worker);
+    // UC-11 (Worker Crash): a crashed worker was never a free worker for
+    // drainQueue to hand tasks to, so without this, anything already sitting
+    // in pool.queue would just wait forever for a worker that's gone — the
+    // pool has room again (workers.length just dropped below MAX_WORKERS)
+    // but nothing would notice until some unrelated *new* call happened to
+    // come in through dispatchToWorker(). Recover the queue right here
+    // instead of leaving it stuck.
+    drainQueue(modulePath, pool);
   });
   // Registering the 'message' listener above re-refs the worker's message
   // port even if unref() ran first — unref() has to come after, or a still
@@ -147,9 +155,21 @@ function runTask(pool, worker, task) {
   }
 }
 
-function drainQueue(pool) {
-  while (pool.free.length > 0 && pool.queue.length > 0) {
-    runTask(pool, pool.free.pop(), pool.queue.shift());
+// Hands queued tasks to free workers, and — unlike the old version — also
+// spawns fresh workers for them when the pool has room but nobody's free.
+// Without that, a queue drained only by reusing already-free workers would
+// stall forever the moment every current worker is busy or has just crashed
+// (see the 'error' handler above): the pool would have capacity again, but
+// nothing would ever act on it.
+function drainQueue(modulePath, pool) {
+  while (pool.queue.length > 0 && (pool.free.length > 0 || pool.workers.length < MAX_WORKERS)) {
+    if (pool.free.length > 0) {
+      runTask(pool, pool.free.pop(), pool.queue.shift());
+    } else {
+      const w = spawnWorker(modulePath, pool);
+      pool.workers.push(w);
+      runTask(pool, w, pool.queue.shift());
+    }
   }
 }
 
@@ -196,4 +216,10 @@ async function jalankan(fnName, localFn, modulePath, args) {
   return result;
 }
 
-module.exports = { jalankan, THRESHOLD_MS, MAX_WORKERS, MAX_QUEUE };
+module.exports = {
+  jalankan, THRESHOLD_MS, MAX_WORKERS, MAX_QUEUE,
+  // Exposed only for tests/test.js's crash-recovery regression test — the
+  // pool/queue live below dispatchToWorker()'s per-call Promise and aren't
+  // otherwise reachable from outside this module.
+  _internals: { getPool, dispatchToWorker, WorkerDispatchError },
+};

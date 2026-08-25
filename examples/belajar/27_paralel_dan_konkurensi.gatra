@@ -15,8 +15,8 @@
 // ke worker".
 
 fungsi paralel jumlahkan(n: angka): angka {
-  isi total = 0
-  isi i = 0
+  isi ubah total = 0
+  isi ubah i = 0
   selama i < n {
     total = total + i
     i = i + 1
@@ -59,7 +59,7 @@ fungsi asinkron utama(): tiada {
   // (THRESHOLD_MS di scheduler.js), panggilan BERIKUTNYA otomatis lompat ke
   // Worker Pool — programmer gak nulis apa pun buat itu, cuma 'tunggu
   // jumlahkan(...)' polos, persis kayak manggil fungsi asinkron biasa.
-  isi i = 0
+  isi ubah i = 0
   selama i < 4 {
     isi hasil = tunggu jumlahkan(2000000000)
     cetak(f"jumlahkan(2000000000) run {i} = {hasil}")

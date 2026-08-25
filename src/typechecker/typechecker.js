@@ -44,6 +44,11 @@ class TypeChecker {
     this.typeAliases = {}; // name → canonical target type (from 'tipe' declarations)
     this.methods = {}; // struct name → Map(method name → { params, returnType }), from receiver funcs
     this.withStack   = []; // active 'dengan'/'ubah' source vars — bare identifiers inside their fields resolve as member access, not a normal lookup
+    // True while type-checking inside a 'tanpa_periksa(...)' call's argument
+    // expressions — suppresses unsafeClosureCapture the same way checkMoveSafety's
+    // 'unsafe' flag suppresses usedAfterMove, so the escape hatch actually
+    // escapes BOTH checks it's documented (and its own error message) to cover.
+    this.suppressClosureCapture = false;
     // Absolute path of the file being checked — needed to resolve relative
     // 'impor' sources for cross-module Go-style visibility checks. Without
     // it (e.g. checking an in-memory snippet), local imports fall back to
@@ -74,6 +79,23 @@ class TypeChecker {
     this.symbols.define('tanpa_periksa', {
       kind: 'fn', name: 'tanpa_periksa', params: [], returnType: 'unknown', variadic: true, builtin: true,
     });
+
+    // ke_teks/ke_angka/dst — konversi tipe eksplisit (satu argumen apapun,
+    // tipe kembalian tetap sesuai namanya). 'builtin: true' supaya tetap bisa
+    // di-shadow user, konsisten dgn builtin lain di atas.
+    const KONVERSI_RETURN_TYPES = {
+      ke_teks:    'string',
+      ke_angka:   'number',
+      ke_bilangan:'int',
+      ke_pecahan: 'float',
+      ke_byte:    'byte',
+      ke_logika:  'bool',
+    };
+    for (const [name, returnType] of Object.entries(KONVERSI_RETURN_TYPES)) {
+      this.symbols.define(name, {
+        kind: 'fn', name, params: [{ type: 'unknown' }], returnType, builtin: true,
+      });
+    }
   }
 
   // ── Public entry point ──────────────────────────────────────────────────────
@@ -760,7 +782,7 @@ class TypeChecker {
     // worker skips straight past whatever top-level statement created that
     // outer binding (isMainThread guard + early return), so it would be a
     // ReferenceError there — caught here at compile time instead.
-    if (this.currentFn && this.currentFn.isParallel && info.kind === 'var') {
+    if (this.currentFn && this.currentFn.isParallel && info.kind === 'var' && !this.suppressClosureCapture) {
       const depth = this.symbols.lookupDepth(node.name);
       if (depth >= 0 && depth < this.currentFn.paralelBoundaryDepth) {
         throw this.err.unsafeClosureCapture(node.name, this.currentFn.name, node.line, node.col);
@@ -864,6 +886,21 @@ class TypeChecker {
   }
 
   inferNamedCall(name, args, node) {
+    // tanpa_periksa(expr) — the escape hatch also has to suppress
+    // unsafeClosureCapture (inferIdentifier below), not just checkMoveSafety's
+    // separate usedAfterMove pass — otherwise the error message's own advice
+    // ("bungkus dengan 'tanpa_periksa(...)'") would be a lie.
+    if (name === 'tanpa_periksa') {
+      const prev = this.suppressClosureCapture;
+      this.suppressClosureCapture = true;
+      try {
+        for (const a of args) this.inferExpr(a);
+      } finally {
+        this.suppressClosureCapture = prev;
+      }
+      return 'unknown';
+    }
+
     const info = this.symbols.lookup(name);
     if (!info) throw this.err.undefinedVar(name, node.line, node.col);
 
@@ -1065,6 +1102,9 @@ class TypeChecker {
     if (node.target.type === N.IDENTIFIER) {
       const info = this.symbols.lookup(node.target.name);
       if (!info) throw this.err.undefinedVar(node.target.name, node.target.line, node.target.col);
+      if (info.kind === 'var' && !info.mutable) {
+        throw this.err.cannotReassignImmutable(node.target.name, node.target.line, node.target.col);
+      }
       if (info.kind === 'var' && !this.compatible(info.type, valueType)) {
         throw this.err.typeMismatch(info.type, valueType, node.value.line, node.value.col);
       }

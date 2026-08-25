@@ -44,6 +44,43 @@ function usesHasil(node) {
   return Object.keys(node).some(k => k !== 'type' && usesHasil(node[k]));
 }
 
+// ke_teks/ke_angka/ke_bilangan/ke_pecahan/ke_byte/ke_logika — konversi tipe
+// eksplisit. Nama fungsi Gatra → nama helper runtime (__gatra_ke_*).
+const KONVERSI_FNS = {
+  ke_teks:     '__gatra_ke_teks',
+  ke_angka:    '__gatra_ke_angka',
+  ke_bilangan: '__gatra_ke_bilangan',
+  ke_pecahan:  '__gatra_ke_pecahan',
+  ke_byte:     '__gatra_ke_byte',
+  ke_logika:   '__gatra_ke_logika',
+};
+
+// ke_teks: String(v) apa adanya. ke_angka/ke_pecahan: Number(v) (parse teks
+// numerik, koersi logika 0/1). ke_bilangan/ke_byte: dipangkas ke bilangan
+// bulat ('bilangan' tanpa batas, 'byte' dibungkus ke rentang 0-255 lewat
+// modulo, konsisten dgn overflow byte gaya Go, bukan clamp). ke_logika:
+// hanya string literal "benar" (persis, gaya Gatra) yang jadi true — string
+// lain (termasuk "salah") sengaja false, bukan Boolean(v) JS biasa yang
+// menganggap string non-kosong apapun truthy.
+const KONVERSI_PRELUDE = `function __gatra_ke_teks(v) { return String(v); }
+function __gatra_ke_angka(v) { return Number(v); }
+function __gatra_ke_bilangan(v) { return Math.trunc(Number(v)); }
+function __gatra_ke_pecahan(v) { return Number(v); }
+function __gatra_ke_byte(v) { return ((Math.trunc(Number(v)) % 256) + 256) % 256; }
+function __gatra_ke_logika(v) { return typeof v === 'string' ? v === 'benar' : Boolean(v); }`;
+
+// Recursively scans an AST for a call to one of KONVERSI_FNS (identifier
+// callee) — only then is the conversion prelude needed.
+function usesKonversi(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) return node.some(usesKonversi);
+  if (node.type === N.CALL_EXPR && typeof node.callee === 'object' &&
+      node.callee.type === N.IDENTIFIER && KONVERSI_FNS[node.callee.name]) {
+    return true;
+  }
+  return Object.keys(node).some(k => k !== 'type' && usesKonversi(node[k]));
+}
+
 // @Nama(...) on a struct/method/param — emitted the same way `tsc
 // --experimentalDecorators --emitDecoratorMetadata` does, since that's the
 // exact calling convention NestJS's DI container (Reflect.getMetadata
@@ -224,6 +261,7 @@ class CodeGenerator {
 
     if (usesTimeout(node)) lines.push(BATAS_PRELUDE);
     if (usesHasil(node)) lines.push(HASIL_PRELUDE);
+    if (usesKonversi(node)) lines.push(KONVERSI_PRELUDE);
     if (usesDecorators(node)) lines.push(DECORATE_PRELUDE);
 
     const testDecls = node.body.filter(s => s.type === N.TEST_DECL);
@@ -673,6 +711,9 @@ const __gatra_scheduler__ = require(${JSON.stringify(SCHEDULER_RUNTIME_PATH)});`
       // actually give it meaning, at compile time); a pure no-op identity
       // wrapper at runtime.
       if (node.callee.name === 'tanpa_periksa') return `(${args})`;
+
+      // ke_teks/ke_angka/dst — konversi tipe eksplisit, lihat KONVERSI_FNS.
+      if (KONVERSI_FNS[node.callee.name]) return `${KONVERSI_FNS[node.callee.name]}(${args})`;
 
       // fungsi paralel — every call goes through the scheduler instead of a
       // plain call, so it can decide Event Loop vs Worker Pool per call

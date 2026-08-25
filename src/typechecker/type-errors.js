@@ -238,6 +238,16 @@ function makeErrors(grammar) {
       return e('SyntaxError', msg, line, col);
     },
 
+    cannotReassignImmutable(varName, line, col) {
+      const msg = isID
+        ? `'${varName}' tidak boleh diberi nilai baru — dideklarasikan tanpa 'ubah'`
+        : `'${varName}' cannot be reassigned — declared without 'ubah' (mut)`;
+      const hint = isID
+        ? `Tambahkan 'ubah' waktu deklarasi kalau '${varName}' memang perlu diubah nanti, contoh: 'isi ubah ${varName} = ...'.`
+        : `Add 'ubah' at declaration if '${varName}' really needs to change later, e.g. 'isi ubah ${varName} = ...'.`;
+      return e('TypeError', msg, line, col, hint);
+    },
+
     usedAfterMove(varName, line, col) {
       const msg = isID
         ? `'${varName}' sudah dipindah (moved) ke 'fungsi paralel' sebelumnya — tidak boleh dipakai lagi. Kirim ulang lewat variabel baru, atau bungkus penggunaannya dengan 'tanpa_periksa(...)' kalau yakin aman`
