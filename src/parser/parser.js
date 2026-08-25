@@ -89,16 +89,6 @@ class Parser {
       base = `result<${ok}, ${err}>`;
     }
 
-    // data<T>  →  Big Data dataset primitive (bounded/unbounded, lihat BIGDATA_TYPE.md).
-    // Sama seperti 'hasil', 'data' bukan kata kunci tipe — dicek dari kata
-    // sumbernya supaya tetap bisa dipakai sebagai nama variabel biasa.
-    if (base === 'data' && this.check(T.LT)) {
-      this.advance(); // consume '<'
-      const inner = this.consumeType('Expected type argument for data<T>');
-      this.consume(T.GT, undefined, "Expected '>' after type argument of data<T>");
-      base = `data<${inner}>`;
-    }
-
     // Consume [] suffixes for array types
     while (this.check(T.LBRACKET)) {
       this.advance(); // consume [
@@ -857,17 +847,8 @@ class Parser {
     return this.callExpr();
   }
 
-  // 'ubah' and 'pilih' are reserved words elsewhere (immutable object update /
-  // pattern match), but they're also the Big Data transform/projection method
-  // names (BIGDATA_TYPE.md §8.3/§8.2). Unambiguous in postfix ('.') position,
-  // so accept their canonical KEYWORD form here and map back to the source
-  // word — each canonical value only ever comes from that one source word
-  // (see KEYWORD_MAP in lexer/keywords.js).
   consumeMemberName(message) {
     if (this.check(T.IDENTIFIER)) return this.advance().value;
-    if (this.check(T.KEYWORD, 'mut'))    { this.advance(); return 'ubah'; }
-    if (this.check(T.KEYWORD, 'select')) { this.advance(); return 'pilih'; }
-    if (this.check(T.KEYWORD, 'from'))   { this.advance(); return 'dari'; }
     return this.consume(T.IDENTIFIER, undefined, message).value;
   }
 
@@ -884,18 +865,6 @@ class Parser {
         const tok    = this.advance();
         const member = this.consumeMemberName('Expected member name after .');
         expr = { type: N.MEMBER_EXPR, object: expr, member, optional: false, line: tok.line, col: tok.col };
-
-        // data.baca<T>(...) / data.alir<T>(...) / data.dari<T>(...) — Big
-        // Data dataset source, the one place a call carries an explicit
-        // generic type argument. Narrowly scoped to this exact shape so '<'
-        // elsewhere still always means less-than.
-        if (expr.object.type === N.IDENTIFIER && expr.object.name === 'data' &&
-            (member === 'baca' || member === 'alir' || member === 'dari') && this.check(T.LT)) {
-          this.advance(); // consume '<'
-          const typeArg = this.consumeType(`Expected type argument for data.${member}<T>`);
-          this.consume(T.GT, undefined, "Expected '>' after type argument");
-          expr.typeArg = typeArg;
-        }
       } else if (this.check(T.QDOT)) {
         const tok    = this.advance();
         const member = this.consumeMemberName("Expected member name after '?.'");
@@ -951,15 +920,6 @@ class Parser {
     }
 
     const tok = this.peek();
-
-    // .field — Big Data field reference (BIGDATA_TYPE.md §7). Only valid
-    // inside a data<T> expression context; enforced by the typechecker, not
-    // here, so parsing stays context-free.
-    if (tok.type === T.DOT) {
-      this.advance();
-      const name = this.consumeMemberName('Expected field name after .');
-      return { type: N.FIELD_EXPR, name, line: tok.line, col: tok.col };
-    }
 
     // F-string: f"Hello {nama}"
     if (tok.type === T.FSTRING) {

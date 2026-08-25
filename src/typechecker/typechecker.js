@@ -44,7 +44,6 @@ class TypeChecker {
     this.typeAliases = {}; // name → canonical target type (from 'tipe' declarations)
     this.methods = {}; // struct name → Map(method name → { params, returnType }), from receiver funcs
     this.withStack   = []; // active 'dengan'/'ubah' source vars — bare identifiers inside their fields resolve as member access, not a normal lookup
-    this.datasetCtx  = 0;  // >0 while checking args of a data<T> method (saring/pilih/ubah/...) — gates .field validity
     // Absolute path of the file being checked — needed to resolve relative
     // 'impor' sources for cross-module Go-style visibility checks. Without
     // it (e.g. checking an in-memory snippet), local imports fall back to
@@ -556,7 +555,6 @@ class TypeChecker {
       case N.TEMPLATE_EXPR:  return this.inferTemplateExpr(node);
       case N.SPREAD_ELEMENT: this.inferExpr(node.value); return 'unknown';
       case N.TERNARY_EXPR:   return this.inferTernaryExpr(node);
-      case N.FIELD_EXPR:     return this.inferFieldExpr(node);
       case N.NAMED_ARG:      return this.inferExpr(node.value);
       default:
         return 'unknown';
@@ -675,10 +673,6 @@ class TypeChecker {
       if (node.callee.type === N.IDENTIFIER) {
         return this.inferNamedCall(node.callee.name, node.args, node);
       }
-      if (node.callee.type === N.MEMBER_EXPR) {
-        const ds = this.inferDatasetCall(node);
-        if (ds !== undefined) return ds;
-      }
       // Method calls on objects (Phase 4): skip type checking, but still
       // visit the callee (e.g. mat.internal(...)) so Go-style visibility on
       // namespace member access is enforced even in call position.
@@ -749,171 +743,6 @@ class TypeChecker {
     }
 
     return info.returnType;
-  }
-
-  // ── Big Data primitive: data<T> (BIGDATA_TYPE.md) ──────────────────────────
-
-  inferFieldExpr(node) {
-    if (this.datasetCtx === 0) throw this.err.fieldExprOutsideDataset(node.name, node.line, node.col);
-    return 'unknown';
-  }
-
-  isDatasetType(t) { return typeof t === 'string' && t.startsWith('data<'); }
-
-  // Field-reference-only argument, e.g. .pilih(.negara), .kelompok(.negara),
-  // .urutkan(.umur) — structural, never generically type-inferred (a bare
-  // .field is only meaningful as data, not as a value to evaluate here).
-  requireFieldRefArg(arg, methodName) {
-    if (!arg || arg.type !== N.FIELD_EXPR) throw this.err.expectedFieldReference(methodName, arg.line, arg.col);
-    return arg.name;
-  }
-
-  // Dispatches data<T> method calls (.saring/.pilih/.ubah/.kelompok/.agregat/
-  // .gabung/.urutkan/.bagi/.paralel/.terdistribusi/.jendela/.ambil/
-  // .kumpulkan/.tulis/.statistik) and the data.baca<T>()/data.alir<T>()
-  // sources. Returns undefined when node isn't a dataset call at all, so the
-  // caller falls back to the generic dynamic-dispatch path.
-  inferDatasetCall(node) {
-    const callee = node.callee; // MEMBER_EXPR
-    const member = callee.member;
-
-    // data.baca<T>(path) / data.alir<T>(path) — dataset source
-    if (callee.object.type === N.IDENTIFIER && callee.object.name === 'data' &&
-        (member === 'baca' || member === 'alir') && callee.typeArg) {
-      for (const a of node.args) this.inferExpr(a);
-      return `data<${callee.typeArg}>`;
-    }
-
-    // data.dari<T>(larik) — wrap an in-memory larik<T> as a data<T> without
-    // a disk round-trip, so it can still reach the native paralel/fusion
-    // path (dataset.js/native-bridge.js work on plain row arrays either way).
-    if (callee.object.type === N.IDENTIFIER && callee.object.name === 'data' &&
-        member === 'dari' && callee.typeArg) {
-      const argType = node.args[0] ? this.inferExpr(node.args[0]) : undefined;
-      if (typeof argType !== 'string' || !argType.endsWith('[]')) {
-        throw this.err.expectedArrayForDari(argType ?? 'tiada', node.line, node.col);
-      }
-      for (const a of node.args.slice(1)) this.inferExpr(a);
-      return `data<${callee.typeArg}>`;
-    }
-
-    const JOIN_VARIANTS = new Set(['dalam', 'kiri', 'kanan', 'penuh']);
-    // .gabung.dalam(...)/.kiri(...)/.kanan(...)/.penuh(...) — join type variant
-    if (JOIN_VARIANTS.has(member) && callee.object.type === N.MEMBER_EXPR && callee.object.member === 'gabung') {
-      const dsType = this.inferExpr(callee.object.object);
-      if (!this.isDatasetType(dsType)) return undefined;
-      this.checkGabungArgs(node.args);
-      return 'data<unknown>';
-    }
-
-    const DATASET_METHODS = new Set([
-      'saring', 'pilih', 'ubah', 'kelompok', 'agregat', 'gabung', 'urutkan',
-      'bagi', 'paralel', 'terdistribusi', 'jendela', 'ambil', 'kumpulkan', 'tulis', 'statistik', 'jelaskan',
-    ]);
-    if (!DATASET_METHODS.has(member)) return undefined;
-
-    const objType = this.inferExpr(callee.object);
-    if (!this.isDatasetType(objType)) return undefined;
-    const recordType = objType.slice(5, -1);
-
-    switch (member) {
-      case 'saring':
-      case 'ubah':
-        this.datasetCtx++;
-        try { for (const a of node.args) this.inferExpr(a); }
-        finally { this.datasetCtx--; }
-        return member === 'saring' ? objType : 'data<unknown>';
-
-      case 'pilih':
-      case 'kelompok':
-        for (const a of node.args) this.requireFieldRefArg(a, member);
-        return member === 'pilih' ? 'data<unknown>' : objType;
-
-      case 'agregat': {
-        const AGG_FN_NAMES = new Set(['hitung', 'jumlah', 'rata_rata', 'minimum', 'maksimum']);
-        const spec = node.args[0];
-        if (!spec || spec.type !== N.OBJECT_LITERAL) throw this.err.invalidAggregateSpec(node.line, node.col);
-        this.datasetCtx++;
-        try {
-          for (const f of spec.fields) {
-            const v = f.value;
-            const isAggCall = v.type === N.CALL_EXPR && typeof v.callee === 'object' &&
-              v.callee.type === N.IDENTIFIER && AGG_FN_NAMES.has(v.callee.name);
-            if (!isAggCall) throw this.err.invalidAggregateSpec(v.line, v.col);
-            this.inferExpr(v);
-          }
-        } finally { this.datasetCtx--; }
-        return 'data<unknown>';
-      }
-
-      case 'gabung':
-        this.checkGabungArgs(node.args);
-        return 'data<unknown>';
-
-      case 'urutkan': {
-        this.requireFieldRefArg(node.args[0], 'urutkan');
-        const dirArg = node.args[1];
-        if (dirArg) {
-          if (dirArg.type !== N.IDENTIFIER || (dirArg.name !== 'menaik' && dirArg.name !== 'menurun')) {
-            throw this.err.invalidSortDirection(dirArg.name ?? '?', dirArg.line, dirArg.col);
-          }
-        }
-        return objType;
-      }
-
-      case 'bagi':
-        if (node.args[0] && node.args[0].type === N.FIELD_EXPR) { /* field-based partition — structural */ }
-        else for (const a of node.args) this.inferExpr(a);
-        return objType;
-
-      case 'jendela':
-        this.datasetCtx++;
-        try { for (const a of node.args) this.inferExpr(a); }
-        finally { this.datasetCtx--; }
-        return objType;
-
-      case 'paralel':
-      case 'terdistribusi':
-      case 'ambil':
-        for (const a of node.args) this.inferExpr(a);
-        return objType;
-
-      case 'kumpulkan':
-        for (const a of node.args) this.inferExpr(a);
-        return recordType + '[]';
-
-      case 'tulis':
-        for (const a of node.args) this.inferExpr(a);
-        return 'void';
-
-      case 'statistik':
-        for (const a of node.args) this.inferExpr(a);
-        return 'unknown';
-
-      case 'jelaskan':
-        for (const a of node.args) this.inferExpr(a);
-        return 'teks';
-
-      default:
-        return 'unknown';
-    }
-  }
-
-  // .gabung(other, pada: kondisi) — 'other' is a normal expression; 'pada's
-  // value is a field-reference condition evaluated over both sides (see
-  // codegen's genGabungArgs for how the two records are merged).
-  checkGabungArgs(args) {
-    const pada = args.find(a => a.type === N.NAMED_ARG && a.name === 'pada');
-    if (!pada) throw this.err.gabungNeedsPada(args[0]?.line, args[0]?.col);
-    for (const a of args) {
-      if (a === pada) {
-        this.datasetCtx++;
-        try { this.inferExpr(a.value); }
-        finally { this.datasetCtx--; }
-      } else {
-        this.inferExpr(a);
-      }
-    }
   }
 
   inferMemberExpr(node) {

@@ -164,47 +164,6 @@ function makeErrors(grammar) {
       return e('SyntaxError', msg, line, col);
     },
 
-    fieldExprOutsideDataset(name, line, col) {
-      const msg = isID
-        ? `'.${name}' (field reference) hanya valid di dalam ekspresi data<T>, mis. .saring(), .pilih(), .agregat()`
-        : `'.${name}' (field reference) is only valid inside a data<T> expression, e.g. .saring(), .pilih(), .agregat()`;
-      return e('SyntaxError', msg, line, col);
-    },
-
-    expectedFieldReference(method, line, col) {
-      const msg = isID
-        ? `'${method}()' hanya menerima field reference (.nama), bukan ekspresi bebas`
-        : `'${method}()' only accepts a field reference (.name), not an arbitrary expression`;
-      return e('SyntaxError', msg, line, col);
-    },
-
-    invalidSortDirection(word, line, col) {
-      const msg = isID
-        ? `Arah urut '${word}' tidak dikenal — gunakan 'menaik' atau 'menurun'`
-        : `Unknown sort direction '${word}' — use 'menaik' (ascending) or 'menurun' (descending)`;
-      return e('SyntaxError', msg, line, col);
-    },
-
-    invalidAggregateSpec(line, col) {
-      const msg = isID
-        ? `Field '.agregat({...})' harus berupa panggilan fungsi agregat: hitung(), jumlah(.f), rata_rata(.f), minimum(.f), maksimum(.f)`
-        : `Each '.agregat({...})' field must be an aggregate function call: hitung(), jumlah(.f), rata_rata(.f), minimum(.f), maksimum(.f)`;
-      return e('SyntaxError', msg, line, col);
-    },
-
-    expectedArrayForDari(got, line, col) {
-      const msg = isID
-        ? `'data.dari<T>()' butuh argumen berupa larik (array), ditemukan '${dt(got)}'`
-        : `'data.dari<T>()' expects an array argument, got '${dt(got)}'`;
-      return e('TypeError', msg, line, col);
-    },
-
-    gabungNeedsPada(line, col) {
-      const msg = isID
-        ? `'.gabung()' butuh argumen 'pada: kondisi' untuk menentukan kondisi join`
-        : `'.gabung()' requires a 'pada: condition' argument to define the join condition`;
-      return e('SyntaxError', msg, line, col);
-    },
   };
 }
 

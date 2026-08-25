@@ -7,8 +7,7 @@
     "gatra": "./src/cli/gatra.js"
   },
   "scripts": {
-    "test": "node tests/test.js",
-    "postinstall": "node scripts/build-native.js"
+    "test": "node tests/test.js"
   },
   "license": "MIT"
 }

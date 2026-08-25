@@ -4,44 +4,6 @@ const path = require('path');
 const { NodeType: N } = require('../ast/nodes');
 const { isPublicName } = require('../module/visibility');
 
-// data<T> — Big Data primitive (BIGDATA_TYPE.md). The runtime lives in a
-// real, testable file rather than an inlined prelude string (unlike
-// BATAS_PRELUDE/HASIL_PRELUDE below) because it's sizeable and has its own
-// unit tests. Required by an absolute path baked in at compile time — same
-// resolution story as any other internal require in this compiler (see
-// baseVmGlobals() in cli/gatra.js: require() closures resolve relative to
-// where they were defined, not to the compiled file's location).
-const DATASET_RUNTIME_PATH = path.resolve(__dirname, '../runtime/dataset.js');
-const DATASET_PRELUDE = `const { data: __gatra_data__ } = require(${JSON.stringify(DATASET_RUNTIME_PATH)});`;
-// ESM variant — used when the same file also has a top-level 'impor' (which
-// compiles to a real ES 'import', forcing the whole file to run as an ES
-// module via runEsm(); a bare require() doesn't exist in that scope). Node's
-// createRequire() gives back a working CJS require bound to this file's URL.
-const DATASET_PRELUDE_ESM = `import { createRequire as __gatra_createRequire__ } from "node:module";
-const { data: __gatra_data__ } = __gatra_createRequire__(import.meta.url)(${JSON.stringify(DATASET_RUNTIME_PATH)});`;
-
-const DATASET_METHODS = new Set([
-  'saring', 'pilih', 'ubah', 'kelompok', 'agregat', 'gabung', 'urutkan',
-  'bagi', 'paralel', 'terdistribusi', 'jendela', 'ambil', 'kumpulkan', 'tulis', 'statistik', 'jelaskan',
-]);
-const DATASET_JOIN_VARIANTS = new Set(['dalam', 'kiri', 'kanan', 'penuh']);
-const DATASET_AGG_FNS = new Set(['hitung', 'jumlah', 'rata_rata', 'minimum', 'maksimum']);
-const DURATION_UNITS = { milidetik: 1, detik: 1000, menit: 60000, jam: 3600000, hari: 86400000 };
-
-// Recursively scans an AST for a data.baca<T>()/data.alir<T>()/data.dari<T>()
-// dataset source — the one place a data<T> value can be created, so its
-// presence is enough to know the runtime prelude is needed.
-function usesDataset(node) {
-  if (!node || typeof node !== 'object') return false;
-  if (Array.isArray(node)) return node.some(usesDataset);
-  if (node.type === N.CALL_EXPR && typeof node.callee === 'object' && node.callee.type === N.MEMBER_EXPR &&
-      node.callee.object.type === N.IDENTIFIER && node.callee.object.name === 'data' &&
-      (node.callee.member === 'baca' || node.callee.member === 'alir' || node.callee.member === 'dari')) {
-    return true;
-  }
-  return Object.keys(node).some(k => k !== 'type' && usesDataset(node[k]));
-}
-
 // tunggu expr batas N detik — Promise.race antara expr dan timer yang me-reject.
 const BATAS_PRELUDE = `function __gatra_batas(ms) {
   return new Promise((_, tolak) => setTimeout(() => tolak(new Error('Timeout')), ms));
@@ -126,8 +88,6 @@ class CodeGenerator {
     this.measureCounter = 0;
     this.withCounter   = 0;
     this.withStack     = []; // active 'dengan'/'ubah' IIFE param names — innermost last
-    this.dsCounter     = 0;  // fresh-name counter for data<T> record-lambda params
-    this.dsStack       = []; // active data<T> record-lambda param names — innermost last
     this.includeTests  = !!opts.includeTests; // 'gatra uji' compiles with tests active
     this.structMethods = new Map(); // struct name → [receiver FnDecl, ...], collected up front by genProgram
     this.structDecls   = new Map(); // struct name → its StructDecl node, collected up front by genProgram
@@ -167,7 +127,6 @@ class CodeGenerator {
       case N.DESTRUCTURE_DECL:  return this.genDestructureDecl(node);
       case N.SPREAD_ELEMENT:    return this.genSpreadElement(node);
       case N.TERNARY_EXPR:      return this.genTernaryExpr(node);
-      case N.FIELD_EXPR:        return this.genFieldExpr(node);
       case N.NAMED_ARG:         return this.generate(node.value);
       case N.BREAK_STMT:        return 'break';
       case N.CONTINUE_STMT:     return 'continue';
@@ -214,28 +173,6 @@ class CodeGenerator {
     if (usesTimeout(node)) lines.push(BATAS_PRELUDE);
     if (usesHasil(node)) lines.push(HASIL_PRELUDE);
     if (usesDecorators(node)) lines.push(DECORATE_PRELUDE);
-    if (usesDataset(node)) {
-      // The dataset prelude is a plain CJS require() (see DATASET_PRELUDE
-      // above) — it only runs under 'gatra jalankan'/'uji' (vm.Script
-      // sandbox, require injected) or 'node file.js' with no top-level
-      // 'export'. A file with 'paket' declared, or compiled with
-      // emitExports (gatra bangun/bundel/bangun-proyek), gets real
-      // 'export' statements — which makes Node (or this CLI's own
-      // js.includes("export ") check in cmdRun/cmdTest) treat it as an ES
-      // module / spawn it via runEsm, where a bare require() throws. Not
-      // supported in this MVP; fail at compile time instead of shipping a
-      // build that crashes at run time.
-      if (this.isPackage || this.emitExports) {
-        throw new Error(
-          "data<T> (Big Data primitive) belum didukung untuk 'gatra bangun'/'bundel'/'bangun-proyek' (output ES module) di MVP ini — jalankan lewat 'gatra jalankan' atau 'gatra uji'."
-        );
-      }
-      // A top-level 'impor' in this same file already forces ES module
-      // output (see genPackageImport() below) — swap in the createRequire()
-      // variant so the bare require() above doesn't throw at runtime.
-      const hasPackageImport = node.body.some(s => s.type === N.PACKAGE_IMPORT);
-      lines.push(hasPackageImport ? DATASET_PRELUDE_ESM : DATASET_PRELUDE);
-    }
 
     // Emit all imports first (before functions/vars)
     for (const stmt of node.body) {
@@ -602,14 +539,6 @@ class CodeGenerator {
   }
 
   genCallExpr(node) {
-    // data<T> methods (.saring/.pilih/.agregat/...) compile their arguments
-    // specially (record-implicit lambdas, structural field names, aggregate
-    // descriptors) — checked first, before the generic arg codegen below.
-    if (typeof node.callee === 'object' && node.callee.type === N.MEMBER_EXPR) {
-      const ds = this.genDatasetCall(node);
-      if (ds !== undefined) return ds;
-    }
-
     const args = node.args.map(a => this.generate(a)).join(', ');
 
     // Built-in hasil<T,E> constructors — checked on the raw callee (before
@@ -637,159 +566,8 @@ class CodeGenerator {
   }
 
   genMemberExpr(node) {
-    // Duration literal: 5.menit, 30.detik, ... (BIGDATA_TYPE.md §11.1 .jendela())
-    if (node.object.type === N.NUMBER_LITERAL && DURATION_UNITS[node.member] !== undefined) {
-      return String(node.object.value * DURATION_UNITS[node.member]);
-    }
     const op = node.optional ? '?.' : '.';
     return `${this.generate(node.object)}${op}${node.member}`;
-  }
-
-  genFieldExpr(node) {
-    if (this.dsStack.length === 0) return `undefined /* .${node.name} outside dataset context */`;
-    return `${this.dsStack[this.dsStack.length - 1]}.${node.name}`;
-  }
-
-  // Dispatches data<T> method-call codegen. Mirrors the typechecker's
-  // inferDatasetCall() detection (see typechecker.js) — undefined means
-  // "not a dataset call", so the caller falls back to generic call codegen.
-  genDatasetCall(node) {
-    const callee = node.callee; // MEMBER_EXPR
-    const member = callee.member;
-
-    // data.baca<T>(path) / data.alir<T>(path) / data.dari<T>(larik)
-    if (callee.object.type === N.IDENTIFIER && callee.object.name === 'data' &&
-        (member === 'baca' || member === 'alir' || member === 'dari') && callee.typeArg) {
-      const args = node.args.map(a => this.generate(a)).join(', ');
-      return `__gatra_data__.${member}(${args})`;
-    }
-
-    // .gabung.dalam(...)/.kiri(...)/.kanan(...)/.penuh(...)
-    if (DATASET_JOIN_VARIANTS.has(member) && callee.object.type === N.MEMBER_EXPR &&
-        callee.object.member === 'gabung' && this.isDatasetTyped(callee.object.object)) {
-      const dsJs = this.generate(callee.object.object);
-      return `${dsJs}.gabung.${member}(${this.genGabungArgs(node.args)})`;
-    }
-
-    if (!DATASET_METHODS.has(member) || !this.isDatasetTyped(callee.object)) return undefined;
-    const dsJs = this.generate(callee.object);
-
-    switch (member) {
-      case 'saring': {
-        const lambdaJs = this.genRecordLambdaArg(node.args[0]);
-        const nativeDesc = this.simpleComparisonDescriptor(node.args[0]);
-        return `${dsJs}.saring(${lambdaJs}${nativeDesc ? `, ${nativeDesc}` : ''})`;
-      }
-      case 'ubah':
-        return `${dsJs}.ubah(${this.genRecordLambdaArg(node.args[0])})`;
-
-      case 'pilih':
-      case 'kelompok':
-        return `${dsJs}.${member}(${node.args.map(a => JSON.stringify(a.name)).join(', ')})`;
-
-      case 'agregat':
-        return `${dsJs}.agregat(${this.genAgregatSpec(node.args[0])})`;
-
-      case 'gabung':
-        return `${dsJs}.gabung(${this.genGabungArgs(node.args)})`;
-
-      case 'urutkan': {
-        const field = JSON.stringify(node.args[0].name);
-        const dir = node.args[1] ? `, ${JSON.stringify(node.args[1].name)}` : '';
-        return `${dsJs}.urutkan(${field}${dir})`;
-      }
-
-      case 'bagi': {
-        const arg = node.args[0];
-        const argJs = arg && arg.type === N.FIELD_EXPR ? JSON.stringify(arg.name) : (arg ? this.generate(arg) : '');
-        return `${dsJs}.bagi(${argJs})`;
-      }
-
-      case 'jendela':
-        return `${dsJs}.jendela(${this.genJendelaArg(node.args[0])})`;
-
-      default: {
-        const args = node.args.map(a => this.generate(a)).join(', ');
-        return `${dsJs}.${member}(${args})`;
-      }
-    }
-  }
-
-  // True when the node's static type (set by the typechecker on node._type)
-  // is a resolved data<T>. Codegen never re-derives dataset-ness itself —
-  // typecheck() always runs before generate() in the compiler pipeline.
-  isDatasetTyped(node) {
-    return typeof node._type === 'string' && node._type.startsWith('data<');
-  }
-
-  // Best-effort structural descriptor for a single "record.field OP literal"
-  // predicate (BIGDATA_TYPE.md canonical examples: .jumlah > 0, .umur >= 18),
-  // handed to .saring() alongside its JS closure so the runtime can offload
-  // this common case to the native Rust engine when available. Any other
-  // predicate shape (&&, function calls, ...) stays JS-closure-only — see
-  // native-engine/src/lib.rs and runtime/dataset.js.
-  simpleComparisonDescriptor(arg) {
-    const OPS = new Set(['>', '<', '>=', '<=', '==', '!=']);
-    if (!arg || arg.type !== N.BINARY_EXPR || !OPS.has(arg.op)) return null;
-    if (arg.left.type !== N.FIELD_EXPR) return null;
-    const litTypes = new Set([N.NUMBER_LITERAL, N.STRING_LITERAL, N.BOOL_LITERAL]);
-    if (!litTypes.has(arg.right.type)) return null;
-    const value = arg.right.value;
-    return `{ field: ${JSON.stringify(arg.left.name)}, op: ${JSON.stringify(arg.op)}, value: ${JSON.stringify(value)} }`;
-  }
-
-  // Wraps a single field-expression argument (predicate / transform) into an
-  // implicit-record arrow function: .saring(.jumlah > 0) → (r) => (r.jumlah > 0)
-  genRecordLambdaArg(arg) {
-    const param = `__r${this.dsCounter++}`;
-    this.dsStack.push(param);
-    const body = this.generate(arg);
-    this.dsStack.pop();
-    return `(${param}) => (${body})`;
-  }
-
-  // .jendela(5.menit) or .jendela({ durasi: 5.menit, berdasarkan: .waktu })
-  genJendelaArg(arg) {
-    if (!arg) return '';
-    const param = `__r${this.dsCounter++}`;
-    this.dsStack.push(param);
-    const body = this.generate(arg);
-    this.dsStack.pop();
-    return body;
-  }
-
-  // .agregat({ total: hitung(), pendapatan: jumlah(.jumlah) }) → a plain
-  // descriptor object (hitung/jumlah/... are markers, never real calls) so
-  // the runtime — and the native Rust engine when available — can execute
-  // it structurally instead of needing to invoke arbitrary JS.
-  genAgregatSpec(objLiteral) {
-    const props = objLiteral.fields.map(f => {
-      const call = f.value; // CALL_EXPR{ callee: Identifier(fnName), args: [FieldExpr?] }
-      const fnName = call.callee.name;
-      const fieldArg = call.args[0];
-      const field = fieldArg && fieldArg.type === N.FIELD_EXPR ? JSON.stringify(fieldArg.name) : 'null';
-      return `${f.name}: { fn: ${JSON.stringify(fnName)}, field: ${field} }`;
-    }).join(', ');
-    return `{ ${props} }`;
-  }
-
-  // .gabung(other, pada: .a == .b) — 'pada's condition sees a single merged
-  // pseudo-record ({ ...left, ...right }); see BIGDATA_TYPE.md §9.3. Known
-  // MVP limitation: a field name present on both sides collides (last one,
-  // the right side, wins) since there's no static schema to disambiguate by.
-  genGabungArgs(args) {
-    const pada = args.find(a => a.type === N.NAMED_ARG && a.name === 'pada');
-    const other = args.find(a => a !== pada);
-    const otherJs = this.generate(other);
-    if (!pada) return otherJs;
-
-    const l = `__gl${this.dsCounter}`;
-    const r = `__gr${this.dsCounter}`;
-    const m = `__gm${this.dsCounter++}`;
-    this.dsStack.push(m);
-    const condJs = this.generate(pada.value);
-    this.dsStack.pop();
-    return `${otherJs}, { pada: (${l}, ${r}) => { const ${m} = Object.assign({}, ${l}, ${r}); return (${condJs}); } }`;
   }
 
   genIndexExpr(node) {

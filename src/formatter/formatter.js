@@ -198,11 +198,8 @@ class Formatter {
         const callee = typeof node.callee === 'string' ? 'cetak' : this.expr(node.callee);
         return `${callee}(${node.args.map(a => this.expr(a)).join(', ')})`;
       }
-      case N.MEMBER_EXPR: {
-        const typeArg = node.typeArg ? `<${node.typeArg}>` : '';
-        return `${this.expr(node.object)}${node.optional ? '?.' : '.'}${node.member}${typeArg}`;
-      }
-      case N.FIELD_EXPR: return `.${node.name}`;
+      case N.MEMBER_EXPR:
+        return `${this.expr(node.object)}${node.optional ? '?.' : '.'}${node.member}`;
       case N.NAMED_ARG:  return `${node.name}: ${this.expr(node.value)}`;
       case N.INDEX_EXPR: return `${this.expr(node.object)}[${this.expr(node.index)}]`;
       case N.STRUCT_INIT: {

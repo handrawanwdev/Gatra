@@ -1,6 +1,0 @@
-[
-  { "negara": "ID", "jumlah": 100, "pengguna_id": 1 },
-  { "negara": "ID", "jumlah": -20, "pengguna_id": 2 },
-  { "negara": "US", "jumlah": 300, "pengguna_id": 1 },
-  { "negara": "US", "jumlah": 50, "pengguna_id": 3 }
-]

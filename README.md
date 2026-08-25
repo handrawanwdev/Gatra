@@ -82,7 +82,6 @@ Gatra dirancang untuk mendukung pengembangan aplikasi nyata dengan:
 - Module
 - Error handling
 - Pattern matching
-- Big Data primitive
 - dan kemampuan modern lainnya
 
 ---
@@ -158,17 +157,33 @@ Hal ini membuat kode yang memiliki banyak kondisi menjadi lebih mudah dibaca.
 
 ---
 
-### 📊 Big Data
+# ⚙️ Cara Kerja Gatra
 
-Gatra juga dirancang dengan perhatian terhadap pengolahan data dalam jumlah besar.
+Gatra **bukan** bahasa yang punya interpreter atau VM sendiri. Gatra adalah **compiler yang menerjemahkan kode `.gatra` menjadi JavaScript biasa**, lalu JavaScript itu yang dijalankan oleh Node.js (V8).
 
-Primitive:
-
-```text
-data<T>
+```
+kode .gatra
+    ↓  lexer      (pecah jadi token)
+    ↓  parser     (susun jadi AST)
+    ↓  typechecker (validasi tipe, visibility, dll)
+    ↓  codegen    (AST → kode JavaScript)
+kode .js
+    ↓
+Node.js (V8)
 ```
 
-menjadi fondasi untuk pengolahan data menggunakan pendekatan yang lebih deklaratif dan dapat dioptimalkan.
+Karena keluarannya JavaScript murni, semua yang bisa dilakukan JavaScript/Node.js bisa dilakukan dari Gatra — termasuk `impor` package dari npm atau modul bawaan Node (`node:http`, `node:fs`, dst), bukan cuma untuk file `.gatra` lokal.
+
+### Dua jalur eksekusi
+
+`gatra jalankan` memilih salah satu dari dua jalur, tergantung isi file:
+
+- **CommonJS (default)** — dijalankan lewat `vm.Script` di dalam proses Node yang sama (sandbox in-process). Ini jalur untuk kode Gatra biasa.
+- **ES Module** — begitu hasil kompilasi mengandung `import`/`export` (misalnya karena pakai `impor ... dari "..."` atau `paket`), Gatra otomatis menulis file `.js` sementara dan menjalankannya lewat proses Node terpisah (`node file.js`), karena `import`/`export` adalah sintaks ES Module asli yang tidak bisa dieksekusi lewat `vm.Script` biasa.
+
+### Kenapa Gatra secepat JavaScript
+
+Gatra **sama cepatnya** dengan JavaScript tulisan tangan. Ini bukan klaim — konsekuensi langsung dari cara kerjanya di atas: Gatra cuma menerjemahkan sintaks ke kode JS yang setara sebelum dijalankan. Tidak ada interpreter tambahan, tidak ada lapisan abstraksi di runtime, tidak ada VM sendiri — V8 menjalankan hasil kompilasinya persis seperti menjalankan JavaScript biasa.
 
 ---
 
@@ -236,6 +251,74 @@ Gatra juga merupakan eksperimen tentang bagaimana sebuah bahasa pemrograman dapa
 
 ---
 
+# 📚 Roadmap Belajar Gatra
+
+Semua contoh di bawah ada di `examples/belajar/` — jalankan langsung dengan `gatra jalankan examples/belajar/<nama_file>.gatra` dari root proyek. Urutan berikut disusun bertahap, dari dasar sampai fitur paling lanjut.
+
+### Tahap 1 — Dasar Bahasa
+
+| File | Materi |
+|---|---|
+| `01_variabel.gatra` | Variabel: `isi`, `ubah`, dan inferensi tipe |
+| `02_tipe_data.gatra` | Sistem tipe: dasar, opsional, dan `apa_saja` |
+| `03_operator.gatra` | Operator aritmatika, perbandingan, logika, dan ternary |
+| `04_fungsi.gatra` | Fungsi: parameter, tipe kembalian, default, dan `balik`/`keluar` |
+| `05_kontrol_alur.gatra` | `jika`/`lain`/`lain jika`, dan `pilih`/`kasus`/`lain` |
+| `06_perulangan.gatra` | `untuk` (range & for-of), `selama`, `berhenti`, `lanjut` |
+
+### Tahap 2 — Struktur Data
+
+| File | Materi |
+|---|---|
+| `07_struktur.gatra` | Struktur: deklarasi, inisialisasi, akses field, nested, `buat` |
+| `08_larik_dan_peta.gatra` | Larik (array) dan Peta (map) |
+| `09_teks_interpolasi.gatra` | f-string: interpolasi teks |
+| `10_objek_dan_destrukturisasi.gatra` | Literal objek, spread, destrukturisasi |
+
+### Tahap 3 — Fungsi Lanjutan, Method, dan Visibility
+
+| File | Materi |
+|---|---|
+| `11_fungsi_lanjutan.gatra` | Fungsi anonim, disimpan di variabel, dan sebagai argumen |
+| `25_metode.gatra` | Method ber-receiver, gaya Go — `fungsi (h Hewan) sapa()` |
+| `26_visibility.gatra` + `26_visibility_modul.gatra` | Visibility identifier gaya Go, termasuk lintas modul |
+
+### Tahap 4 — Error Handling & Pattern Matching
+
+| File | Materi |
+|---|---|
+| `13_penanganan_galat.gatra` | `coba`/`tangkap`/`akhirnya` |
+| `23_hasil_pattern_matching.gatra` | `hasil<T, E>` + `berhasil`/`gagal` + `cocok` |
+
+### Tahap 5 — Tipe & Modul
+
+| File | Materi |
+|---|---|
+| `14_tipe_alias_dan_ekspor.gatra` | `tipe` (alias tipe) dan visibility (ekspor) |
+
+### Tahap 6 — Asinkron & Observability
+
+| File | Materi |
+|---|---|
+| `15_asinkron.gatra` | `asinkron`/`tunggu` (async/await) |
+| `21_batas_waktu.gatra` | `tunggu expr batas N detik` (timeout untuk Promise) |
+| `24_ukur_timing.gatra` | `ukur "label" { ... }` — observability/timing |
+
+### Tahap 7 — Interop JavaScript & Transformasi Data
+
+| File | Materi |
+|---|---|
+| `20_fondasi_javascript.gatra` | Fondasi kompatibilitas JavaScript — indexing, arrow function, `?.`, `??`, rest params, `javascript{}` escape hatch |
+| `22_transformasi_objek.gatra` | `dengan` (transformasi) dan `ubah` (pembaruan immutable) |
+
+### Tahap 8 — Testing Bawaan Bahasa
+
+| File | Materi |
+|---|---|
+| `19_pengujian.gatra` | `uji`/`pastikan` (pengujian bawaan bahasa) |
+
+---
+
 # 🚀 Mulai Menggunakan Gatra
 
 Untuk mencoba Gatra:
@@ -253,6 +336,22 @@ gatra buat proyek-saya
 cd proyek-saya
 gatra jalankan utama.gatra
 ```
+
+### Perintah CLI lainnya
+
+```bash
+gatra jalankan <file>                        # Kompilasi dan jalankan file .gatra
+gatra bangun <file> [output] [--samar]       # Kompilasi satu file ke .js
+gatra bundel <entry> [output] [--samar]      # Bundle semua dependensi ke satu file .js
+gatra bangun-proyek <dir> [dist] [--samar]   # Kompilasi seluruh proyek
+gatra uji <file>                             # Jalankan blok 'uji' dalam file
+gatra periksa <file>                         # Analisis statis (linter)
+gatra rapikan <file> [--tulis]               # Format kode (stdout, atau --tulis untuk menimpa file)
+gatra versi                                  # Tampilkan versi compiler
+gatra bantuan                                # Tampilkan bantuan
+```
+
+Gatra tidak punya package manager sendiri — pakai `npm install`/`npm update`/`npm uninstall` langsung untuk dependensi.
 
 # 🤝 Kontribusi
 
