@@ -96,6 +96,26 @@ class TypeChecker {
         kind: 'fn', name, params: [{ type: 'unknown' }], returnType, builtin: true,
       });
     }
+
+    // keTeks/keLarik/gabung — conversion & sequence operations. Tiga peran
+    // yang sengaja tidak tumpang tindih:
+    //   keTeks  : Value  -> Teks   (konversi nilai tunggal, sama seperti ke_teks)
+    //   keLarik : Iterable -> Larik (materialization eksplisit — Array.from)
+    //   gabung  : Iterable -> Teks (join langsung, TIDAK lewat Larik antara)
+    // 'iterable'/'nilai' bertipe 'unknown' karena Gatra belum punya tipe
+    // Iterable/Sequence sendiri — parameternya menerima larik, teks, Map,
+    // Set, atau iterator/generator JS mentah apa pun (lihat KONVERSI_FNS di
+    // codegen.js). keLarik mengembalikan 'unknown' (bukan 'T[]') karena tipe
+    // elemennya tidak diketahui statis dari sebuah Iterable generik.
+    this.symbols.define('keTeks', {
+      kind: 'fn', name: 'keTeks', params: [{ type: 'unknown' }], returnType: 'string', builtin: true,
+    });
+    this.symbols.define('keLarik', {
+      kind: 'fn', name: 'keLarik', params: [{ type: 'unknown' }], returnType: 'unknown', builtin: true,
+    });
+    this.symbols.define('gabung', {
+      kind: 'fn', name: 'gabung', params: [{ type: 'unknown' }, { type: 'unknown' }], returnType: 'string', builtin: true,
+    });
   }
 
   // ── Public entry point ──────────────────────────────────────────────────────

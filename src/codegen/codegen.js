@@ -53,6 +53,13 @@ const KONVERSI_FNS = {
   ke_pecahan:  '__gatra_ke_pecahan',
   ke_byte:     '__gatra_ke_byte',
   ke_logika:   '__gatra_ke_logika',
+  // keTeks/keLarik/gabung — conversion & sequence operations (lihat
+  // typechecker.js untuk kenapa ketiganya tidak tumpang tindih). 'keTeks'
+  // sengaja dipetakan ke helper yang SAMA dengan 'ke_teks' — dua nama Gatra,
+  // satu perilaku (Value -> Teks), tidak ada alasan menduplikasi logikanya.
+  keTeks:      '__gatra_ke_teks',
+  keLarik:     '__gatra_ke_larik',
+  gabung:      '__gatra_gabung',
 };
 
 // ke_teks: String(v) apa adanya. ke_angka/ke_pecahan: Number(v) (parse teks
@@ -62,12 +69,33 @@ const KONVERSI_FNS = {
 // hanya string literal "benar" (persis, gaya Gatra) yang jadi true — string
 // lain (termasuk "salah") sengaja false, bukan Boolean(v) JS biasa yang
 // menganggap string non-kosong apapun truthy.
+// __gatra_ke_larik: Array.from() materializes ANY JS-iterable (larik, teks,
+// Map, Set, iterator/generator mentah) into a real, concrete array — this is
+// the only one of the three that actually allocates a new Larik, and only
+// when called (never implicitly by keTeks/gabung).
+//
+// __gatra_gabung: join langsung dengan for-of, TANPA lewat Array.from/larik
+// antara — jalan sama persis di larik maupun iterator/generator lazy
+// (dikonsumsi satu-satu, tidak pernah butuh seluruh isinya sekaligus ada di
+// memori sebagai larik). String(item) dipakai per elemen, bukan
+// Array.prototype.join punya JS, karena inputnya belum tentu sebuah larik.
 const KONVERSI_PRELUDE = `function __gatra_ke_teks(v) { return String(v); }
 function __gatra_ke_angka(v) { return Number(v); }
 function __gatra_ke_bilangan(v) { return Math.trunc(Number(v)); }
 function __gatra_ke_pecahan(v) { return Number(v); }
 function __gatra_ke_byte(v) { return ((Math.trunc(Number(v)) % 256) + 256) % 256; }
-function __gatra_ke_logika(v) { return typeof v === 'string' ? v === 'benar' : Boolean(v); }`;
+function __gatra_ke_logika(v) { return typeof v === 'string' ? v === 'benar' : Boolean(v); }
+function __gatra_ke_larik(it) { return Array.from(it); }
+function __gatra_gabung(it, pemisah) {
+  let __hasil = '';
+  let __pertama = true;
+  for (const __item of it) {
+    if (!__pertama) __hasil += pemisah;
+    __hasil += String(__item);
+    __pertama = false;
+  }
+  return __hasil;
+}`;
 
 // Recursively scans an AST for a call to one of KONVERSI_FNS (identifier
 // callee) — only then is the conversion prelude needed.
@@ -79,6 +107,197 @@ function usesKonversi(node) {
     return true;
   }
   return Object.keys(node).some(k => k !== 'type' && usesKonversi(node[k]));
+}
+
+// Metode bawaan yang ditanam ke prototype JS asli (String/Number/Boolean/
+// Array/Object) — bukan modul yang perlu di-'impor', jalan otomatis di
+// SEMUA nilai teks/angka/logika/larik/objek begitu dipakai (lihat
+// TIPE_DATA_METHOD_NAMES di bawah untuk deteksi pemakaian). Sama-sama
+// 'number' di JS untuk angka/bilangan/pecahan/byte, jadi method numeriknya
+// nempel di satu tempat (Number.prototype) — tidak bisa dibedakan lagi
+// antara bilangan vs byte di titik runtime. enumerable:false supaya aman
+// dari for-in/JSON.stringify/spread di seluruh proses.
+const TIPE_DATA_PRELUDE = `(function () {
+  var __tanam = function (proto, nama, fn) {
+    Object.defineProperty(proto, nama, { value: fn, writable: true, configurable: true, enumerable: false });
+  };
+
+  __tanam(String.prototype, 'Panjang', function () { return this.length; });
+  __tanam(String.prototype, 'Kosong', function () { return this.length === 0; });
+  __tanam(String.prototype, 'Besar', function () { return this.toUpperCase(); });
+  __tanam(String.prototype, 'Kecil', function () { return this.toLowerCase(); });
+  __tanam(String.prototype, 'KeAngka', function () { return Number(this); });
+  __tanam(String.prototype, 'KeBilangan', function () { return Math.trunc(Number(this)); });
+  __tanam(String.prototype, 'KePecahan', function () { return parseFloat(this); });
+  __tanam(String.prototype, 'Bersihkan', function () { return this.trim(); });
+  __tanam(String.prototype, 'Ulangi', function (n) { return this.repeat(n); });
+  __tanam(String.prototype, 'BalikkanTeks', function () { return this.split('').reverse().join(''); });
+  __tanam(String.prototype, 'Sensor', function (depan, belakang, karakter) {
+    depan = depan === undefined ? 2 : depan;
+    belakang = belakang === undefined ? 2 : belakang;
+    karakter = karakter === undefined ? '*' : karakter;
+    if (this.length <= depan + belakang) return karakter.repeat(this.length);
+    return this.slice(0, depan) + karakter.repeat(this.length - depan - belakang) + this.slice(this.length - belakang);
+  });
+
+  __tanam(Number.prototype, 'KeTeks', function () { return String(this); });
+  __tanam(Number.prototype, 'Genap', function () { return this % 2 === 0; });
+  __tanam(Number.prototype, 'Ganjil', function () { return this % 2 !== 0; });
+  __tanam(Number.prototype, 'Bulatkan', function () { return Math.round(this); });
+  __tanam(Number.prototype, 'Positif', function () { return this > 0; });
+  __tanam(Number.prototype, 'ValidByte', function () { return this >= 0 && this <= 255; });
+  __tanam(Number.prototype, 'Batasi', function (min, max) { return Math.min(Math.max(this, min), max); });
+  __tanam(Number.prototype, 'Antara', function (min, max) { return this >= min && this <= max; });
+
+  __tanam(Boolean.prototype, 'Balik', function () { return !this; });
+  __tanam(Boolean.prototype, 'KeTeks', function () { return String(this); });
+
+  __tanam(Array.prototype, 'Jumlah', function () { return this.reduce(function (total, n) { return total + n; }, 0); });
+  __tanam(Array.prototype, 'Kosong', function () { return this.length === 0; });
+  __tanam(Array.prototype, 'Tambah', function (nilai) { return this.concat([nilai]); });
+  __tanam(Array.prototype, 'Petakan', function (callback) {
+    return this.reduce(function (hasil, item) {
+      var kunci = callback(item);
+      if (!hasil[kunci]) hasil[kunci] = [];
+      hasil[kunci].push(item);
+      return hasil;
+    }, {});
+  });
+
+  __tanam(Array.prototype, 'Bagian', function (ukuran) {
+    ukuran = ukuran === undefined ? 1 : ukuran;
+    if (ukuran <= 0) return [];
+    var hasil = [];
+    for (var i = 0; i < this.length; i += ukuran) {
+      hasil.push(this.slice(i, i + ukuran));
+    }
+    return hasil;
+  });
+
+  __tanam(Array.prototype, 'Pisahkan', function (predikat) {
+    var benar = [];
+    var salah = [];
+    for (var i = 0; i < this.length; i++) {
+      if (predikat(this[i])) {
+        benar.push(this[i]);
+      } else {
+        salah.push(this[i]);
+      }
+    }
+    return [benar, salah];
+  });
+
+  __tanam(Array.prototype, 'Urutkan', function (selektor, arah) {
+    arah = arah === undefined ? 'naik' : arah;
+    return this.slice().sort(function (a, b) {
+      var nilaiA = selektor(a);
+      var nilaiB = selektor(b);
+      if (nilaiA < nilaiB) return arah === 'turun' ? 1 : -1;
+      if (nilaiA > nilaiB) return arah === 'turun' ? -1 : 1;
+      return 0;
+    });
+  });
+
+  __tanam(Array.prototype, 'BuatUnik', function (selektor) {
+    var terlihat = new Set();
+    var hasil = [];
+    for (var i = 0; i < this.length; i++) {
+      var kunci = selektor(this[i]);
+      if (!terlihat.has(kunci)) {
+        terlihat.add(kunci);
+        hasil.push(this[i]);
+      }
+    }
+    return hasil;
+  });
+
+  __tanam(Array.prototype, 'Acak', function () {
+    if (this.length === 0) return undefined;
+    return this[Math.floor(Math.random() * this.length)];
+  });
+
+  __tanam(Array.prototype, 'AcakSebanyak', function (jumlah) {
+    if (jumlah <= 0) return [];
+    var hasil = this.slice();
+    for (var i = hasil.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var tmp = hasil[i];
+      hasil[i] = hasil[j];
+      hasil[j] = tmp;
+    }
+    return hasil.slice(0, Math.min(jumlah, hasil.length));
+  });
+
+  __tanam(Array.prototype, 'Rata', function (selektor) {
+    if (this.length === 0) return 0;
+    var jumlah = this.reduce(function (total, item) { return total + (selektor ? selektor(item) : item); }, 0);
+    return jumlah / this.length;
+  });
+  __tanam(Array.prototype, 'Maksimum', function (selektor) {
+    if (this.length === 0) return undefined;
+    var terbaik = this[0];
+    var nilaiTerbaik = selektor ? selektor(terbaik) : terbaik;
+    for (var i = 1; i < this.length; i++) {
+      var nilai = selektor ? selektor(this[i]) : this[i];
+      if (nilai > nilaiTerbaik) { terbaik = this[i]; nilaiTerbaik = nilai; }
+    }
+    return terbaik;
+  });
+  __tanam(Array.prototype, 'Minimum', function (selektor) {
+    if (this.length === 0) return undefined;
+    var terbaik = this[0];
+    var nilaiTerbaik = selektor ? selektor(terbaik) : terbaik;
+    for (var i = 1; i < this.length; i++) {
+      var nilai = selektor ? selektor(this[i]) : this[i];
+      if (nilai < nilaiTerbaik) { terbaik = this[i]; nilaiTerbaik = nilai; }
+    }
+    return terbaik;
+  });
+  __tanam(Array.prototype, 'Pertama', function () { return this.length ? this[0] : undefined; });
+  __tanam(Array.prototype, 'Terakhir', function () { return this.length ? this[this.length - 1] : undefined; });
+  __tanam(Array.prototype, 'Hitung', function (predikat) { return this.filter(predikat).length; });
+  __tanam(Array.prototype, 'Datar', function (kedalaman) { return this.flat(kedalaman === undefined ? 1 : kedalaman); });
+  __tanam(Array.prototype, 'Potong', function (n) { return this.slice(0, n); });
+  __tanam(Array.prototype, 'Lewati', function (n) { return this.slice(n); });
+  __tanam(Array.prototype, 'SemuaCocok', function (predikat) { return this.every(predikat); });
+  __tanam(Array.prototype, 'AdaCocok', function (predikat) { return this.some(predikat); });
+
+  __tanam(Object.prototype, 'PunyaKunci', function (kunci) { return Object.prototype.hasOwnProperty.call(this, kunci); });
+  __tanam(Object.prototype, 'AmbilAtauDefault', function (kunci, cadangan) { var v = this[kunci]; return v == null ? cadangan : v; });
+  __tanam(Object.prototype, 'Salin', function () { return Object.assign({}, this); });
+  __tanam(Object.prototype, 'Gabung', function (objekLain) { return Object.assign({}, this, objekLain); });
+  __tanam(Object.prototype, 'Kunci', function () { return Object.keys(this); });
+  __tanam(Object.prototype, 'Nilai', function () { return Object.values(this); });
+})();`;
+
+// Nama method yang di atas ditanam ke prototype — dipakai usesTipeData()
+// buat cek pemakaian nyata (member-call 'x.Nama(...)') sebelum nyuntik
+// prelude, biar program yang tidak pernah pakai fitur ini tidak ikut
+// mem-patch prototype global secara diam-diam.
+const TIPE_DATA_METHOD_NAMES = new Set([
+  'Panjang', 'Kosong', 'Besar', 'Kecil', 'KeAngka', 'KeBilangan', 'KePecahan',
+  'Bersihkan', 'Ulangi', 'BalikkanTeks', 'Sensor',
+  'KeTeks', 'Genap', 'Ganjil', 'Bulatkan', 'Positif', 'ValidByte', 'Batasi', 'Antara',
+  'Balik', 'Jumlah', 'Tambah', 'Petakan', 'Bagian', 'Pisahkan', 'Urutkan', 'BuatUnik',
+  'Acak', 'AcakSebanyak', 'Rata', 'Maksimum', 'Minimum', 'Pertama', 'Terakhir',
+  'Hitung', 'Datar', 'Potong', 'Lewati', 'SemuaCocok', 'AdaCocok',
+  'PunyaKunci', 'AmbilAtauDefault', 'Salin', 'Gabung', 'Kunci', 'Nilai',
+]);
+
+// Recursively scans an AST for a member-call (x.Nama(...)) whose member name
+// matches one of TIPE_DATA_METHOD_NAMES — only then is the prototype-patch
+// prelude needed. A struct with its OWN receiver method of the same name
+// (e.g. user's own 'fungsi (a Akun) Tambah(...)') would also match here —
+// harmless false positive, since the prelude only adds prototype methods
+// that a same-named instance method on a real class always shadows anyway.
+function usesTipeData(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) return node.some(usesTipeData);
+  if (node.type === N.CALL_EXPR && typeof node.callee === 'object' &&
+      node.callee.type === N.MEMBER_EXPR && TIPE_DATA_METHOD_NAMES.has(node.callee.member)) {
+    return true;
+  }
+  return Object.keys(node).some(k => k !== 'type' && usesTipeData(node[k]));
 }
 
 // @Nama(...) on a struct/method/param — emitted the same way `tsc
@@ -263,6 +482,7 @@ class CodeGenerator {
     if (usesHasil(node)) lines.push(HASIL_PRELUDE);
     if (usesKonversi(node)) lines.push(KONVERSI_PRELUDE);
     if (usesDecorators(node)) lines.push(DECORATE_PRELUDE);
+    if (usesTipeData(node)) lines.push(TIPE_DATA_PRELUDE);
 
     const testDecls = node.body.filter(s => s.type === N.TEST_DECL);
     if (this.includeTests && testDecls.length > 0) {
@@ -744,7 +964,15 @@ const __gatra_scheduler__ = require(${JSON.stringify(SCHEDULER_RUNTIME_PATH)});`
 
   genMemberExpr(node) {
     const op = node.optional ? '?.' : '.';
-    return `${this.generate(node.object)}${op}${node.member}`;
+    // '5.Genap()' adalah SyntaxError di JS (titik dibaca sebagai bagian
+    // literal desimal) — bungkus kurung otomatis untuk objek berupa angka
+    // literal langsung, sama seperti kalau ditulis manual '(5).Genap()'.
+    // Parser Gatra sendiri tidak punya node grouping (tanda kurung sumber
+    // sudah "transparan"/dibuang di AST), jadi kurung ini murni kebutuhan
+    // sintaks JS keluaran, bukan niat penulis sumber.
+    const objSrc = this.generate(node.object);
+    const needsParens = node.object.type === N.NUMBER_LITERAL;
+    return `${needsParens ? `(${objSrc})` : objSrc}${op}${node.member}`;
   }
 
   genIndexExpr(node) {

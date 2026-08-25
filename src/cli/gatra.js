@@ -93,6 +93,12 @@ const LOCAL_MG_IMPORT_RE = /from ("\.\.?\/[^"]+\.gatra")/g;
 // buildWithDeps() below uses to walk 'gatra bangun's dependency graph.
 const LOCAL_MG_SOURCE_RE = /impor\s+(?:\{[^}]*\}|\w+)\s+dari\s+"(\.\.?\/[^"]+\.gatra)"/g;
 
+// Thrown by compileLocalDep() below after it already printed the error —
+// signals runEsm() to exit(1) once the tmpDir 'finally' cleanup has run,
+// instead of calling process.exit() directly mid-try (which would skip
+// that cleanup and leak the tmpDir).
+const EXIT_SILENTLY = Symbol("exit-silently");
+
 function runEsm(sourceFile, js, _sourceCode) {
   const entryAbs   = path.resolve(sourceFile);
   const sourceDir  = path.dirname(entryAbs);
@@ -103,6 +109,7 @@ function runEsm(sourceFile, js, _sourceCode) {
   // node_modules to find. Removed in the 'finally' below either way.
   const tmpDir = fs.mkdtempSync(path.join(sourceDir, ".gatra_tmp_"));
 
+  let exitCode = 0;
   try {
     const seen = new Set();
 
@@ -121,7 +128,7 @@ function runEsm(sourceFile, js, _sourceCode) {
 
       if (!fs.existsSync(absPath)) {
         console.error(`ModulTidakDitemukan: '${absPath}' tidak ada`);
-        process.exit(1);
+        throw EXIT_SILENTLY;
       }
 
       const src = fs.readFileSync(absPath, "utf8");
@@ -130,7 +137,7 @@ function runEsm(sourceFile, js, _sourceCode) {
         depJs = compile(src, { filePath: absPath, emitExports: true });
       } catch (err) {
         console.error(formatError(err, src, absPath));
-        process.exit(1);
+        throw EXIT_SILENTLY;
       }
       depJs = rewriteMgImports(depJs);
 
@@ -151,10 +158,14 @@ function runEsm(sourceFile, js, _sourceCode) {
     fs.writeFileSync(mainMjs, rewriteMgImports(js), "utf8");
 
     const result = spawnSync(process.execPath, [mainMjs], { stdio: "inherit" });
-    if (result.status !== 0) process.exit(result.status ?? 1);
+    exitCode = result.status ?? 1;
+  } catch (err) {
+    if (err !== EXIT_SILENTLY) throw err;
+    exitCode = 1;
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+  if (exitCode !== 0) process.exit(exitCode);
 }
 
 // ── 'fungsi paralel' runner ──────────────────────────────────────────────────
@@ -178,14 +189,16 @@ function usesParallelScheduler(js) {
 function runViaFile(sourceFile, js) {
   const sourceDir = path.dirname(path.resolve(sourceFile));
   const tmpDir = fs.mkdtempSync(path.join(sourceDir, ".gatra_tmp_"));
+  let exitCode = 0;
   try {
     const mainJs = path.join(tmpDir, "main.js");
     fs.writeFileSync(mainJs, js, "utf8");
     const result = spawnSync(process.execPath, [mainJs], { stdio: "inherit" });
-    if (result.status !== 0) process.exit(result.status ?? 1);
+    exitCode = result.status ?? 1;
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+  if (exitCode !== 0) process.exit(exitCode);
 }
 
 // ── Project build helpers ─────────────────────────────────────────────────────

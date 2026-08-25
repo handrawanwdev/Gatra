@@ -25,7 +25,7 @@ struktur Pengguna {
   nama: teks
   alamat: Alamat
 }
-
+isi Contoh: teks = "Handrawan"
 isi user = Pengguna {
   nama: "Handrawan",
   alamat: Alamat { kota: "Jakarta", kodePos: 12345 }

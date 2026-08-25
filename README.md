@@ -1,238 +1,84 @@
 # Gatra
 
-> **Bahasa pemrograman dengan sintaks Bahasa Indonesia.**
+> Bahasa pemrograman statically-typed dengan sintaks Bahasa Indonesia, dikompilasi ke JavaScript murni.
 
-Gatra adalah bahasa pemrograman **statically typed** yang dirancang untuk membuat pemrograman terasa lebih sederhana, natural, dan mudah dipahami.
+Dokumen ini fokus ke dua hal: **cara pakai** Gatra, dan **cara kerjanya di belakang layar**. Untuk pengantar bahasa, contoh kode per fitur, dan tutorial bertahap, lihat [PANDUAN_BELAJAR.md](PANDUAN_BELAJAR.md).
 
-Gatra menggunakan sintaks Bahasa Indonesia, tetapi tetap memanfaatkan kekuatan dan luasnya ekosistem JavaScript.
+---
 
-```text
-Sederhana bahasanya.
-Bersih kodenya.
-Luas ekosistemnya.
+# 🚀 Cara Pakai
+
+### Instalasi
+
+```bash
+git clone <url-repository>
+cd gatra
+npm install
 ```
 
----
+### Mulai proyek baru
 
-## Kenapa Gatra?
-
-Bahasa pemrograman modern memiliki kemampuan yang sangat besar, tetapi sintaksnya sering kali terasa jauh dari bahasa yang digunakan sehari-hari.
-
-Gatra mencoba membuat kode lebih dekat dengan cara kita memahami instruksi.
-
-Daripada:
-
-```javascript
-const name = "Gatra";
-
-if (version === 1) {
-  console.log("Versi pertama");
-} else {
-  console.log("Versi lain");
-}
+```bash
+gatra buat proyek-saya
+cd proyek-saya
+gatra jalankan utama.gatra
 ```
 
-Gatra menggunakan:
+`gatra buat` juga menerima `--arch` untuk memilih template: `sederhana` (default), `modular`, `clean`, `hexagonal`, atau `microservice`.
 
-```gatra
-isi nama: teks = "Gatra"
-isi versi: angka = 1
+### Belajar sintaksnya
 
-jika (versi == 1) {
-    cetak("Versi pertama")
-} lain {
-    cetak("Versi lain")
-}
+Semua contoh ada di `examples/belajar/`, disusun bertahap dari dasar sampai fitur paling lanjut — jalankan langsung dengan:
+
+```bash
+gatra jalankan examples/belajar/<nama_file>.gatra
 ```
 
-Tujuannya bukan sekadar menerjemahkan keyword bahasa pemrograman.
+Daftar lengkap file beserta kode dan penjelasannya ada di [PANDUAN_BELAJAR.md](PANDUAN_BELAJAR.md).
 
-Gatra ingin membangun pengalaman pemrograman yang terasa **lebih familiar, jelas, dan mudah dibaca**.
+### Perintah CLI
 
----
+Daftar lengkap juga selalu bisa dilihat langsung lewat `gatra bantuan`.
 
-## Filosofi Gatra
+```bash
+# Proyek
+gatra buat [nama] [--arch <arsitektur>]      # Inisialisasi proyek baru
+                                              #   --arch: sederhana | modular | clean | hexagonal | microservice
+gatra info                                   # Info proyek (baca gatra.toml)
 
-Gatra dibangun berdasarkan beberapa prinsip sederhana.
+# Pengembangan
+gatra kembangkan [file]                      # Mode dev (watch + restart otomatis)
+gatra jalankan <file>                        # Kompilasi dan jalankan file .gatra
+gatra uji [file]                             # Jalankan blok 'uji' (proyek jika tanpa argumen)
+gatra periksa <file>                         # Analisis statis (linter)
+gatra rapikan <file> [--tulis]               # Format kode (stdout, atau --tulis untuk menimpa file)
 
-### Bahasa yang mudah dipahami
+# Build
+gatra bangun <file> [output] [--samar]       # Kompilasi satu file ke .js
+gatra bundel <entry> [output] [--samar]      # Bundle semua dependensi ke satu file .js
+gatra bangun-proyek <dir> [dist] [--samar]   # Kompilasi seluruh proyek
+gatra bersihkan [dir]                        # Hapus artefak build (dist/, .gatra/, .cache/)
 
-Kode seharusnya dapat dibaca tanpa harus menghafalkan terlalu banyak istilah asing.
+# Analisis
+gatra graf [file] [--format json|mermaid]    # Dependency graph
+gatra jelaskan <file> [fungsi]               # Klasifikasi CPU-bound/I-O-bound & strategi paralelisasi
+gatra ukur <file>                            # Benchmark waktu kompilasi & eksekusi
+gatra dokter                                 # Diagnostik environment (Node, npm, dll)
 
-```gatra
-jika pengguna.aktif {
-    cetak("Selamat datang")
-}
+# Sistem
+gatra versi                                  # Tampilkan versi compiler
+gatra bantuan                                # Tampilkan bantuan
 ```
 
-Kode dapat dibaca seperti instruksi.
+`--samar` menghasilkan kode yang disamarkan (identifier dienkripsi, string diubah ke unicode) — berguna kalau mau distribusikan hasil build tanpa source `.gatra`-nya.
+
+### Dependensi & konfigurasi proyek
+
+Gatra tidak punya package manager sendiri — dependensi tetap dikelola lewat `npm install`/`npm update`/`npm uninstall` seperti biasa. Konfigurasi per-proyek (nama, versi, arsitektur, entry point, output build) disimpan di `gatra.toml`, dibaca oleh perintah seperti `gatra info`, `gatra bangun-proyek`, dan `gatra bersihkan`.
 
 ---
 
-### Tetap serius untuk membangun software
-
-Mudah dibaca bukan berarti sederhana secara kemampuan.
-
-Gatra dirancang untuk mendukung pengembangan aplikasi nyata dengan:
-
-- Static typing
-- Type inference
-- Struktur data
-- Fungsi
-- Module
-- Error handling
-- Pattern matching
-- dan kemampuan modern lainnya
-
----
-
-### Memanfaatkan ekosistem yang sudah ada
-
-Gatra tidak ingin developer harus meninggalkan ekosistem JavaScript yang sudah sangat luas.
-
-Gatra dapat memanfaatkan package dan library JavaScript yang sudah tersedia.
-
-Dengan begitu, developer mendapatkan pengalaman bahasa baru tanpa kehilangan ekosistem yang sudah mereka kenal.
-
----
-
-# ✨ Fitur
-
-### 🇮🇩 Sintaks Bahasa Indonesia
-
-Keyword utama menggunakan Bahasa Indonesia sehingga kode terasa lebih natural bagi developer Indonesia.
-
-```gatra
-isi nama: teks = "Handrawan"
-
-jika nama == "Handrawan" {
-    cetak("Halo!")
-}
-```
-
----
-
-### 🔒 Static Typing
-
-Gatra menggunakan static typing untuk membantu menangkap kesalahan lebih awal.
-
-```gatra
-isi umur: angka = 25
-isi nama: teks = "Gatra"
-```
-
-Tipe juga dapat diinferensikan ketika tidak ditulis secara eksplisit.
-
----
-
-### 🧩 Ekosistem JavaScript
-
-Gatra tetap berada dekat dengan JavaScript.
-
-Developer dapat memanfaatkan library dan package yang sudah tersedia di ekosistem JavaScript dan npm.
-
-Artinya, Gatra tidak mengharuskan developer membangun semuanya dari awal.
-
----
-
-### 🎯 Error Handling yang Jelas
-
-Gatra menyediakan pendekatan eksplisit untuk menangani hasil operasi yang dapat berhasil maupun gagal.
-
-Konsep seperti:
-
-```text
-hasil<T, E>
-```
-
-membuat alur error lebih jelas dan mudah ditelusuri.
-
----
-
-### 🔀 Pattern Matching
-
-Gatra menyediakan `cocok` untuk menangani beberapa kemungkinan nilai dengan cara yang lebih terstruktur.
-
-Hal ini membuat kode yang memiliki banyak kondisi menjadi lebih mudah dibaca.
-
----
-
-### 🔁 Konversi Tipe Eksplisit
-
-Kadang nilai perlu diubah dari satu tipe ke tipe lain — misalnya angka dari input jadi teks, atau teks jadi angka. Gatra menyediakan fungsi bawaan untuk itu, namanya jelas dan gampang ditebak:
-
-```gatra
-isi teksAngka = ke_teks(42)        // "42"
-isi angkaAsli = ke_angka("3.5")    // 3.5
-isi dibulatkan = ke_bilangan(9.9)  // 9
-isi angkaDesimal = ke_pecahan("2.25") // 2.25
-isi satuByte = ke_byte(300)        // 44 (dibungkus ke rentang 0-255)
-isi valid = ke_logika("benar")     // benar (logika)
-```
-
-`ke_logika` cuma menganggap string `"benar"` persis sebagai `benar` — string lain (termasuk `"salah"`) jadi `salah`, beda dari kebiasaan JavaScript yang menganggap string apa pun yang tidak kosong sebagai truthy.
-
----
-
-### ⚡ Automatic Concurrency (`fungsi paralel`)
-
-Biasanya, kalau mau kode jalan paralel di banyak inti CPU, developer harus bikin thread/worker manual. Di Gatra, cukup tambahkan kata `paralel` di depan `fungsi`:
-
-```gatra
-fungsi paralel jumlahkan(n: angka): angka {
-    isi ubah total = 0
-    isi ubah i = 0
-    selama i < n {
-        total = total + i
-        i = i + 1
-    }
-    balik total
-}
-
-fungsi asinkron utama(): tiada {
-    isi hasil = tunggu jumlahkan(20000000)
-    cetak(hasil)
-}
-utama()
-```
-
-Gatra yang mengurus sisanya lewat sebuah **scheduler runtime**:
-
-- Panggilan pertama (cold start) jalan langsung di Event Loop — jalur paling murah.
-- Kalau fungsi itu terbukti berat (rata-rata durasinya lewat ambang tertentu), panggilan berikutnya otomatis dialihkan ke **worker pool** (dibatasi sejumlah core CPU, maksimal 8) — tanpa developer menulis kode thread sama sekali.
-- Kalau worker pool dan antreannya penuh, tugas tetap dijalankan inline — jadi beban di scheduler tidak pernah membuat program berhenti, cuma kehilangan sedikit optimasi.
-
-**Concurrency Safety** — supaya "otomatis" ini tetap aman, compiler melakukan beberapa pemeriksaan saat kompilasi:
-
-- **Ownership/move-checking** — variabel yang dikirim ke `fungsi paralel` dianggap "dipindah" (moved); memakainya lagi sesudahnya adalah galat kompilasi.
-- **Closure capture check** — `fungsi paralel` tidak boleh membaca variabel dari luar fungsinya (worker menjalankan ulang file dari awal dan tidak akan pernah sampai ke deklarasi variabel itu).
-- **Worker transfer validation** — struktur yang dikirim ke `fungsi paralel` harus data murni (tidak boleh punya method), karena method/class tidak selamat melewati batas worker.
-- **`tanpa_periksa(...)`** — escape hatch eksplisit kalau developer yakin suatu penggunaan aman, tapi tetap harus terlihat jelas di kode (tidak ada "unsafe" yang tersembunyi).
-
-Detail lengkap fase dan rencana lanjutannya ada di `Automatic_Concurrency.md`.
-
----
-
-### 🛠️ Tooling Bawaan
-
-Gatra bukan cuma compiler — ada beberapa alat bantu langsung dari CLI:
-
-- **Linter** (`gatra periksa`) — analisis statis untuk menangkap pola bermasalah sebelum dijalankan.
-- **Formatter** (`gatra rapikan`) — merapikan gaya penulisan kode secara otomatis.
-- **Dependency graph** (`gatra graf`) — memetakan hubungan `impor` antar file `.gatra`, termasuk mendeteksi circular import, dengan output teks (default), JSON, atau Mermaid.
-- **Explain** (`gatra jelaskan`) — mengklasifikasikan tiap fungsi sebagai CPU-bound/I/O-bound dan menyarankan strategi paralelisasi yang cocok.
-- **Doctor** (`gatra dokter`) — memeriksa kesehatan environment (versi Node, npm, dll) sebelum mulai kerja.
-- **Dev mode** (`gatra kembangkan`) — mode watch, otomatis compile ulang saat file berubah.
-
----
-
-### 📦 Dependensi & Konfigurasi Proyek
-
-Gatra tidak membangun package manager sendiri dari nol — dependensi tetap dikelola lewat `npm` seperti biasa. Yang dimiliki Gatra sendiri adalah `gatra.toml`, file konfigurasi ringan per-proyek (nama, versi, arsitektur, entry point, output build) yang dibaca oleh perintah seperti `gatra info`, `gatra bangun-proyek`, dan `gatra bersihkan`.
-
----
-
-# ⚙️ Cara Kerja Gatra
+# ⚙️ Arsitektur & Cara Kerja
 
 Gatra **bukan** bahasa yang punya interpreter atau VM sendiri. Gatra adalah **compiler yang menerjemahkan kode `.gatra` menjadi JavaScript biasa**, lalu JavaScript itu yang dijalankan oleh Node.js (V8).
 
@@ -282,214 +128,19 @@ Semua tahap ini murni fungsi/kelas biasa yang dipanggil berurutan — tidak ada 
 
 Gatra **sama cepatnya** dengan JavaScript tulisan tangan. Ini bukan klaim — konsekuensi langsung dari cara kerjanya di atas: Gatra cuma menerjemahkan sintaks ke kode JS yang setara sebelum dijalankan. Tidak ada interpreter tambahan, tidak ada lapisan abstraksi di runtime, tidak ada VM sendiri — V8 menjalankan hasil kompilasinya persis seperti menjalankan JavaScript biasa.
 
----
+### Automatic Concurrency: scheduler & Concurrency Safety
 
-# 🧑‍💻 Contoh
+`fungsi paralel` (lihat contoh di [PANDUAN_BELAJAR.md](PANDUAN_BELAJAR.md#27_paralel_dan_konkurensigatra)) tidak langsung berarti "selalu jalan di thread terpisah". Tiap panggilan lewat runtime scheduler (`src/runtime/scheduler.js`):
 
-Program sederhana:
+- Panggilan pertama (cold start) jalan langsung di Event Loop — jalur paling murah selama belum terbukti mahal.
+- Kalau rata-rata durasi eksekusi fungsi itu lewat ambang tertentu, panggilan berikutnya otomatis dialihkan ke **worker pool** (dibatasi sejumlah core CPU, maksimal 8). Keputusan ini dievaluasi ulang tiap panggilan, bukan status permanen — begitu beban turun lagi, panggilan berikutnya balik ke Event Loop.
+- Kalau worker pool dan antreannya penuh, tugas tetap dijalankan inline — beban di scheduler tidak pernah membuat program berhenti, cuma kehilangan sedikit optimasi.
 
-```gatra
-isi nama: teks = "Gatra"
+Supaya "otomatis" ini tetap aman, `typechecker/` melakukan beberapa pemeriksaan statis saat kompilasi (bagian dari `Automatic_Concurrency.md`, Fase 0):
 
-cetak("Halo, ", nama)
-```
+- **Ownership/move-checking** — variabel yang dikirim ke `fungsi paralel` dianggap "dipindah" (moved); memakainya lagi sesudahnya adalah galat kompilasi.
+- **Closure capture check** — `fungsi paralel` tidak boleh membaca variabel dari luar fungsinya, karena kalau panggilan itu dieskalasi ke worker, file dijalankan ulang dari awal dan tidak pernah sampai ke deklarasi variabel itu.
+- **Worker transfer validation** — struktur yang dikirim ke `fungsi paralel` harus data murni (tidak boleh punya method), karena method/class tidak selamat melewati batas worker.
+- **`tanpa_periksa(...)`** — escape hatch eksplisit kalau developer yakin suatu penggunaan aman, tapi tetap harus terlihat jelas di kode, tidak ada "unsafe" yang tersembunyi.
 
-Fungsi:
-
-```gatra
-fungsi tambah(a: angka, b: angka): angka {
-    balik a + b
-}
-
-isi hasil = tambah(10, 20)
-
-cetak(hasil)
-```
-
-Struktur:
-
-```gatra
-struktur Pengguna {
-    Nama: teks
-    umur: angka
-}
-
-isi pengguna = Pengguna {
-    Nama: "Budi",
-    umur: 25
-}
-
-cetak(pengguna.Nama)
-```
-
-Kode Gatra dirancang agar dapat dibaca dengan cepat bahkan ketika kita baru pertama kali melihatnya.
-
----
-
-# 🌱 Untuk Siapa?
-
-Gatra ditujukan untuk siapa saja yang ingin mempelajari atau membangun software dengan bahasa yang lebih dekat dengan Bahasa Indonesia.
-
-### Pemula
-
-Gatra dapat menjadi pintu masuk untuk memahami konsep pemrograman tanpa harus langsung berhadapan dengan banyak istilah sintaks berbahasa Inggris.
-
-### Developer
-
-Developer yang sudah terbiasa dengan JavaScript atau TypeScript dapat menggunakan konsep yang familiar sambil mendapatkan pengalaman dengan sintaks Gatra.
-
-### Pendidikan
-
-Gatra dapat digunakan sebagai media pembelajaran pemrograman dengan bahasa yang lebih dekat dengan bahasa sehari-hari.
-
-### Eksperimen Bahasa
-
-Gatra juga merupakan eksperimen tentang bagaimana sebuah bahasa pemrograman dapat dirancang dengan Bahasa Indonesia sebagai bagian utama dari sintaksnya.
-
----
-
-# 📚 Roadmap Belajar Gatra
-
-Semua contoh di bawah ada di `examples/belajar/` — jalankan langsung dengan `gatra jalankan examples/belajar/<nama_file>.gatra` dari root proyek. Urutan berikut disusun bertahap, dari dasar sampai fitur paling lanjut.
-
-### Tahap 1 — Dasar Bahasa
-
-| File | Materi |
-|---|---|
-| `01_variabel.gatra` | Variabel: `isi`, `ubah`, dan inferensi tipe |
-| `02_tipe_data.gatra` | Sistem tipe: dasar, opsional, dan `apa_saja` |
-| `03_operator.gatra` | Operator aritmatika, perbandingan, logika, dan ternary |
-| `04_fungsi.gatra` | Fungsi: parameter, tipe kembalian, default, dan `balik`/`keluar` |
-| `05_kontrol_alur.gatra` | `jika`/`lain`/`lain jika`, dan `pilih`/`kasus`/`lain` |
-| `06_perulangan.gatra` | `untuk` (range & for-of), `selama`, `berhenti`, `lanjut` |
-
-### Tahap 2 — Struktur Data
-
-| File | Materi |
-|---|---|
-| `07_struktur.gatra` | Struktur: deklarasi, inisialisasi, akses field, nested, `buat` |
-| `08_larik_dan_peta.gatra` | Larik (array) dan Peta (map) |
-| `09_teks_interpolasi.gatra` | f-string: interpolasi teks |
-| `10_objek_dan_destrukturisasi.gatra` | Literal objek, spread, destrukturisasi |
-
-### Tahap 3 — Fungsi Lanjutan, Method, dan Visibility
-
-| File | Materi |
-|---|---|
-| `11_fungsi_lanjutan.gatra` | Fungsi anonim, disimpan di variabel, dan sebagai argumen |
-| `25_metode.gatra` | Method ber-receiver, gaya Go — `fungsi (h Hewan) sapa()` |
-| `26_visibility.gatra` + `26_visibility_modul.gatra` | Visibility identifier gaya Go, termasuk lintas modul |
-
-### Tahap 4 — Error Handling & Pattern Matching
-
-| File | Materi |
-|---|---|
-| `13_penanganan_galat.gatra` | `coba`/`tangkap`/`akhirnya` |
-| `23_hasil_pattern_matching.gatra` | `hasil<T, E>` + `berhasil`/`gagal` + `cocok` |
-
-### Tahap 5 — Tipe & Modul
-
-| File | Materi |
-|---|---|
-| `14_tipe_alias_dan_ekspor.gatra` | `tipe` (alias tipe) dan visibility (ekspor) |
-
-### Tahap 6 — Asinkron & Observability
-
-| File | Materi |
-|---|---|
-| `15_asinkron.gatra` | `asinkron`/`tunggu` (async/await) |
-| `21_batas_waktu.gatra` | `tunggu expr batas N detik` (timeout untuk Promise) |
-| `24_ukur_timing.gatra` | `ukur "label" { ... }` — observability/timing |
-
-### Tahap 7 — Interop JavaScript & Transformasi Data
-
-| File | Materi |
-|---|---|
-| `20_fondasi_javascript.gatra` | Fondasi kompatibilitas JavaScript — indexing, arrow function, `?.`, `??`, rest params, `javascript{}` escape hatch |
-| `22_transformasi_objek.gatra` | `dengan` (transformasi) dan `ubah` (pembaruan immutable) |
-
-### Tahap 8 — Testing Bawaan Bahasa
-
-| File | Materi |
-|---|---|
-| `19_pengujian.gatra` | `uji`/`pastikan` (pengujian bawaan bahasa) |
-
-### Tahap 9 — Automatic Concurrency (paling lanjut)
-
-| File | Materi |
-|---|---|
-| `27_paralel_dan_konkurensi.gatra` | `fungsi paralel` — bounded worker pool + adaptive cost-based dispatch, plus Concurrency Safety (ownership/move-checking, closure capture, worker transfer validation, escape hatch `tanpa_periksa`) — Fase 0 dari `Automatic_Concurrency.md` |
-
----
-
-# 🚀 Mulai Menggunakan Gatra
-
-Untuk mencoba Gatra:
-
-```bash
-git clone <url-repository>
-cd gatra
-npm install
-```
-
-Kemudian:
-
-```bash
-gatra buat proyek-saya
-cd proyek-saya
-gatra jalankan utama.gatra
-```
-
-### Perintah CLI lainnya
-
-Daftar lengkap juga selalu bisa dilihat langsung lewat `gatra bantuan`.
-
-```bash
-# Proyek
-gatra buat [nama] [--arch <arsitektur>]      # Inisialisasi proyek baru
-                                              #   --arch: sederhana | modular | clean | hexagonal | microservice
-gatra info                                   # Info proyek (baca gatra.toml)
-
-# Pengembangan
-gatra kembangkan [file]                      # Mode dev (watch + restart otomatis)
-gatra jalankan <file>                        # Kompilasi dan jalankan file .gatra
-gatra uji [file]                             # Jalankan blok 'uji' (proyek jika tanpa argumen)
-gatra periksa <file>                         # Analisis statis (linter)
-gatra rapikan <file> [--tulis]               # Format kode (stdout, atau --tulis untuk menimpa file)
-
-# Build
-gatra bangun <file> [output] [--samar]       # Kompilasi satu file ke .js
-gatra bundel <entry> [output] [--samar]      # Bundle semua dependensi ke satu file .js
-gatra bangun-proyek <dir> [dist] [--samar]   # Kompilasi seluruh proyek
-gatra bersihkan [dir]                        # Hapus artefak build (dist/, .gatra/, .cache/)
-
-# Analisis
-gatra graf [file] [--format json|mermaid]    # Dependency graph
-gatra jelaskan <file> [fungsi]               # Klasifikasi CPU-bound/I-O-bound & strategi paralelisasi
-gatra ukur <file>                            # Benchmark waktu kompilasi & eksekusi
-gatra dokter                                 # Diagnostik environment (Node, npm, dll)
-
-# Sistem
-gatra versi                                  # Tampilkan versi compiler
-gatra bantuan                                # Tampilkan bantuan
-```
-
-`--samar` menghasilkan kode yang disamarkan (identifier dienkripsi, string diubah ke unicode) — berguna kalau mau distribusikan hasil build tanpa source `.gatra`-nya.
-
-Gatra tidak punya package manager sendiri — pakai `npm install`/`npm update`/`npm uninstall` langsung untuk dependensi.
-
-# 🤝 Kontribusi
-
-Gatra adalah proyek terbuka.
-
-Ide, diskusi, eksperimen, laporan bug, dan kontribusi kode sangat diterima.
-
-Jika kamu tertarik dengan bahasa pemrograman, compiler, JavaScript, atau ingin melihat bagaimana bahasa pemrograman dengan sintaks Bahasa Indonesia berkembang, silakan ikut berkontribusi.
-
----
-
-# Gatra
-
-**Pemrograman dengan bahasa yang kita pahami.**
-
-_Sederhana bahasanya. Bersih kodenya. Luas ekosistemnya._
+Detail lengkap fase dan rencana lanjutannya ada di `Automatic_Concurrency.md`.

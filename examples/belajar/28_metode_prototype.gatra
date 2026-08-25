@@ -1,0 +1,123 @@
+// 28_metode_prototype.gatra — Metode bawaan yang ditanam ke prototype JS
+//
+// Bukan modul yang perlu di-'impor' — begitu salah satu nama method di
+// bawah ini dipanggil di manapun dalam file, compiler otomatis nyuntik
+// patch prototype (String/Number/Boolean/Array/Object) sekali di awal
+// program. Jalan langsung di literal, variabel, atau hasil ekspresi apa
+// pun — tidak perlu bungkus struktur dulu.
+//
+// CATATAN:
+//   - angka/bilangan/pecahan/byte semua sama-sama 'number' di JS — cuma ada
+//     SATU Number.prototype, jadi method numerik di bawah nempel buat
+//     semuanya sekaligus (tidak bisa dibedakan lagi bilangan vs byte di
+//     titik runtime).
+//   - literal angka langsung butuh kurung: (5).Genap(), bukan 5.Genap() —
+//     keterbatasan sintaks JS (titik dibaca sebagai bagian literal desimal),
+//     bukan bug. Variabel biasa (isi n = 5; n.Genap()) aman.
+
+// ── Teks ─────────────────────────────────────────────────────────────────
+cetak("Gatra".Panjang())
+cetak("Gatra".Besar())
+cetak("GATRA".Kecil())
+cetak("".Kosong())
+cetak("123".KeAngka())
+cetak("42".KeBilangan())
+cetak("3.14".KePecahan())
+cetak("  Gatra  ".Bersihkan())
+cetak("ab".Ulangi(3))
+cetak("Gatra".BalikkanTeks())
+cetak("081234565678".Sensor(4, 4))
+
+// ── Angka (angka/bilangan/pecahan/byte — satu Number.prototype) ─────────
+isi n = 8
+cetak(n.Genap())
+cetak(n.Ganjil())
+cetak(n.KeTeks())
+cetak(n.Positif())
+cetak(5.Genap()) // literal angka langsung — compiler otomatis bungkus kurung
+
+isi nilaiPecahan = 3.75
+cetak(nilaiPecahan.Bulatkan())
+
+isi kandidatByte = 200
+cetak(kandidatByte.ValidByte())
+
+isi suhu = 120
+cetak(suhu.Batasi(0, 100))
+cetak(suhu.Antara(0, 100))
+
+// ── Logika ────────────────────────────────────────────────────────────────
+cetak(benar.Balik())
+cetak(salah.KeTeks())
+
+// ── Larik ─────────────────────────────────────────────────────────────────
+isi nilai: angka[] = [10, 20, 30]
+cetak(nilai.Jumlah())
+cetak(nilai.Kosong())
+cetak(nilai.Tambah(40))
+
+// Petakan(callback) — kelompokkan elemen larik berdasar hasil callback,
+// gaya 'groupBy': { kunci: [elemen, ...] }
+isi pengguna = [
+  { nama: "Ana",   umur: 20 },
+  { nama: "Budi",  umur: 30 },
+  { nama: "Citra", umur: 20 }
+]
+cetak(pengguna.Petakan((p) => p.umur))
+
+// Bagian(ukuran = 1) — pecah larik jadi potongan-potongan sepanjang
+// 'ukuran', gaya 'chunk'
+cetak([1, 2, 3, 4, 5].Bagian(2))
+cetak([1, 2, 3].Bagian())
+
+// Pisahkan(predikat) — belah larik jadi [cocok, tidakCocok] berdasar
+// predikat, gaya 'partition'
+cetak([1, 2, 3, 4, 5, 6].Pisahkan((n) => n.Genap()))
+
+// Urutkan(selector, arah = "naik") — urutkan larik pakai hasil selector,
+// tidak mengubah larik asal (immutable, gaya 'sortBy')
+cetak(pengguna.Urutkan((p) => p.umur))
+cetak(pengguna.Urutkan((p) => p.umur, "turun"))
+
+// BuatUnik(selector) — buang elemen duplikat berdasar hasil selector,
+// pertahankan kemunculan pertama, gaya 'uniqBy'
+cetak(pengguna.BuatUnik((p) => p.umur))
+
+// Acak() — ambil satu elemen acak. AcakSebanyak(jumlah) — kocok lalu ambil
+// N elemen tanpa duplikat (Fisher-Yates), tidak mengubah larik asal
+cetak(nilai.Acak())
+cetak(nilai.AcakSebanyak(2))
+
+// Rata/Maksimum/Minimum(selector opsional) — statistik dasar
+cetak(nilai.Rata())
+cetak(pengguna.Maksimum((p) => p.umur))
+cetak(pengguna.Minimum((p) => p.umur))
+
+// Pertama/Terakhir — aman dipanggil di larik kosong (balik 'kosong')
+cetak(nilai.Pertama())
+cetak(nilai.Terakhir())
+
+// Hitung(predikat) — jumlah elemen cocok
+cetak(nilai.Hitung((n) => n.Genap()))
+
+// Datar(kedalaman = 1) — flatten larik bersarang
+isi matriks: angka[][] = [[1, 2], [3, 4], [5, 6]]
+cetak(matriks.Datar())
+
+// Potong(n)/Lewati(n) — take/skip, gaya pipeline data
+cetak(nilai.Potong(2))
+cetak(nilai.Lewati(1))
+
+// SemuaCocok/AdaCocok — every/some
+cetak(nilai.SemuaCocok((n) => n.Positif()))
+cetak(nilai.AdaCocok((n) => n > 25))
+
+// ── Objek ────────────────────────────────────────────────────────────────
+isi profil = { kota: "Jakarta", kodePos: 12345 }
+cetak(profil.PunyaKunci("kota"))
+cetak(profil.PunyaKunci("provinsi"))
+cetak(profil.AmbilAtauDefault("provinsi", "tidak diketahui"))
+cetak(profil.Salin())
+cetak(profil.Gabung({ provinsi: "DKI Jakarta" }))
+cetak(profil.Kunci())
+cetak(profil.Nilai())

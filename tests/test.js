@@ -3009,6 +3009,55 @@ run('executes: ke_logika treats only the exact string "benar" as true', () => {
   assertEqual(out[3], 'true');
 });
 
+console.log('\n── keTeks/keLarik/gabung (conversion & sequence ops) ────────────');
+
+run('typechecker: keTeks(nilai) -> teks, keLarik(iterable) -> unknown, gabung(iterable, pemisah) -> teks', () => {
+  tc('isi a: teks = keTeks(123)\nisi b = keLarik("Gatra")\nisi c: teks = gabung(["A", "B"], "-")');
+});
+
+run("typechecker: gabung requires exactly 2 args (iterable, pemisah) — arity enforced", () => {
+  assertThrows(() => tc('cetak(gabung([1, 2]))'), 'membutuhkan 2 argumen');
+});
+
+run('typechecker: keTeks/keLarik/gabung can be shadowed by a user declaration', () => {
+  tc('fungsi gabung(a: angka, b: angka): angka { balik a + b }\nisi x: angka = gabung(1, 2)');
+});
+
+run('codegen: keTeks reuses the same helper as ke_teks (no duplicated conversion logic)', () => {
+  const js = compile('cetak(keTeks(1))\ncetak(ke_teks(2))');
+  const matches = js.match(/function __gatra_ke_teks\(/g);
+  assertEqual(matches.length, 1);
+  assert(js.includes('__gatra_ke_teks(1)'), js);
+  assert(js.includes('__gatra_ke_teks(2)'), js);
+});
+
+run('codegen: keLarik/gabung compile to their own helpers, plus prelude', () => {
+  const js = compile('cetak(keLarik("x"))\ncetak(gabung([1], "-"))');
+  assert(js.includes('__gatra_ke_larik("x")'), js);
+  assert(js.includes('__gatra_gabung([1], "-")'), js);
+  assert(js.includes('function __gatra_ke_larik('), js);
+  assert(js.includes('function __gatra_gabung('), js);
+});
+
+run('executes: keTeks(123) -> "123", keLarik("Gatra") materializes to a real array, gabung joins without an intermediate array', () => {
+  const out = exec('cetak(keTeks(123))\ncetak(keLarik("Gatra"))\ncetak(gabung(["A", "B", "C"], "-"))');
+  assertEqual(out[0], '123');
+  assertEqual(out[1], 'G,a,t,r,a'); // console.log stringifies the array via Array.prototype.toString
+  assertEqual(out[2], 'A-B-C');
+});
+
+run('executes: gabung and keLarik both work directly on a real lazy JS generator (not just arrays/strings)', () => {
+  const out = exec(`
+    fungsi buatGen(): apa_saja {
+      javascript { return (function*() { yield "X"; yield "Y"; yield "Z"; })(); }
+    }
+    cetak(gabung(buatGen(), "|"))
+    cetak(keLarik(buatGen()))
+  `);
+  assertEqual(out[0], 'X|Y|Z');
+  assertEqual(out[1], 'X,Y,Z');
+});
+
 console.log('\n── Concurrency Safety gap fixes (usecase-concurrency.md) ────────');
 
 run("typechecker: 'tanpa_periksa(x)' now actually works as the closure-capture escape hatch it's documented as (UC-13)", () => {

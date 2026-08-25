@@ -2,12 +2,12 @@
 
 // Tipe dasar
 isi t1: teks = "halo"
-isi t2: angka = 42          // generik — menerima bilangan, pecahan, byte
+isi ubah t2: angka = 42          // generik — menerima bilangan, pecahan, byte
 isi t3: bilangan = 10       // harus bilangan bulat — 'bilangan = 3.14' GALAT saat kompilasi
 isi t4: pecahan = 3.14      // boleh bulat maupun desimal
 isi t5: logika = benar
 isi t6: byte = 255          // bilangan bulat 0-255 — 'byte = 256' GALAT saat kompilasi
-isi t2 = 31
+t2 = 31
 cetak(t1)
 cetak(t2)
 cetak(t3)
