@@ -784,6 +784,19 @@ class TypeChecker {
       return `data<${callee.typeArg}>`;
     }
 
+    // data.dari<T>(larik) — wrap an in-memory larik<T> as a data<T> without
+    // a disk round-trip, so it can still reach the native paralel/fusion
+    // path (dataset.js/native-bridge.js work on plain row arrays either way).
+    if (callee.object.type === N.IDENTIFIER && callee.object.name === 'data' &&
+        member === 'dari' && callee.typeArg) {
+      const argType = node.args[0] ? this.inferExpr(node.args[0]) : undefined;
+      if (typeof argType !== 'string' || !argType.endsWith('[]')) {
+        throw this.err.expectedArrayForDari(argType ?? 'tiada', node.line, node.col);
+      }
+      for (const a of node.args.slice(1)) this.inferExpr(a);
+      return `data<${callee.typeArg}>`;
+    }
+
     const JOIN_VARIANTS = new Set(['dalam', 'kiri', 'kanan', 'penuh']);
     // .gabung.dalam(...)/.kiri(...)/.kanan(...)/.penuh(...) — join type variant
     if (JOIN_VARIANTS.has(member) && callee.object.type === N.MEMBER_EXPR && callee.object.member === 'gabung') {

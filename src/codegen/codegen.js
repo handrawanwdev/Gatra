@@ -13,6 +13,12 @@ const { isPublicName } = require('../module/visibility');
 // where they were defined, not to the compiled file's location).
 const DATASET_RUNTIME_PATH = path.resolve(__dirname, '../runtime/dataset.js');
 const DATASET_PRELUDE = `const { data: __gatra_data__ } = require(${JSON.stringify(DATASET_RUNTIME_PATH)});`;
+// ESM variant — used when the same file also has a top-level 'impor' (which
+// compiles to a real ES 'import', forcing the whole file to run as an ES
+// module via runEsm(); a bare require() doesn't exist in that scope). Node's
+// createRequire() gives back a working CJS require bound to this file's URL.
+const DATASET_PRELUDE_ESM = `import { createRequire as __gatra_createRequire__ } from "node:module";
+const { data: __gatra_data__ } = __gatra_createRequire__(import.meta.url)(${JSON.stringify(DATASET_RUNTIME_PATH)});`;
 
 const DATASET_METHODS = new Set([
   'saring', 'pilih', 'ubah', 'kelompok', 'agregat', 'gabung', 'urutkan',
@@ -22,15 +28,15 @@ const DATASET_JOIN_VARIANTS = new Set(['dalam', 'kiri', 'kanan', 'penuh']);
 const DATASET_AGG_FNS = new Set(['hitung', 'jumlah', 'rata_rata', 'minimum', 'maksimum']);
 const DURATION_UNITS = { milidetik: 1, detik: 1000, menit: 60000, jam: 3600000, hari: 86400000 };
 
-// Recursively scans an AST for a data.baca<T>()/data.alir<T>() dataset
-// source — the one place a data<T> value can be created, so its presence is
-// enough to know the runtime prelude is needed.
+// Recursively scans an AST for a data.baca<T>()/data.alir<T>()/data.dari<T>()
+// dataset source — the one place a data<T> value can be created, so its
+// presence is enough to know the runtime prelude is needed.
 function usesDataset(node) {
   if (!node || typeof node !== 'object') return false;
   if (Array.isArray(node)) return node.some(usesDataset);
   if (node.type === N.CALL_EXPR && typeof node.callee === 'object' && node.callee.type === N.MEMBER_EXPR &&
       node.callee.object.type === N.IDENTIFIER && node.callee.object.name === 'data' &&
-      (node.callee.member === 'baca' || node.callee.member === 'alir')) {
+      (node.callee.member === 'baca' || node.callee.member === 'alir' || node.callee.member === 'dari')) {
     return true;
   }
   return Object.keys(node).some(k => k !== 'type' && usesDataset(node[k]));
@@ -224,7 +230,11 @@ class CodeGenerator {
           "data<T> (Big Data primitive) belum didukung untuk 'gatra bangun'/'bundel'/'bangun-proyek' (output ES module) di MVP ini — jalankan lewat 'gatra jalankan' atau 'gatra uji'."
         );
       }
-      lines.push(DATASET_PRELUDE);
+      // A top-level 'impor' in this same file already forces ES module
+      // output (see genPackageImport() below) — swap in the createRequire()
+      // variant so the bare require() above doesn't throw at runtime.
+      const hasPackageImport = node.body.some(s => s.type === N.PACKAGE_IMPORT);
+      lines.push(hasPackageImport ? DATASET_PRELUDE_ESM : DATASET_PRELUDE);
     }
 
     // Emit all imports first (before functions/vars)
@@ -647,9 +657,9 @@ class CodeGenerator {
     const callee = node.callee; // MEMBER_EXPR
     const member = callee.member;
 
-    // data.baca<T>(path) / data.alir<T>(path)
+    // data.baca<T>(path) / data.alir<T>(path) / data.dari<T>(larik)
     if (callee.object.type === N.IDENTIFIER && callee.object.name === 'data' &&
-        (member === 'baca' || member === 'alir') && callee.typeArg) {
+        (member === 'baca' || member === 'alir' || member === 'dari') && callee.typeArg) {
       const args = node.args.map(a => this.generate(a)).join(', ');
       return `__gatra_data__.${member}(${args})`;
     }

@@ -192,6 +192,13 @@ function makeErrors(grammar) {
       return e('SyntaxError', msg, line, col);
     },
 
+    expectedArrayForDari(got, line, col) {
+      const msg = isID
+        ? `'data.dari<T>()' butuh argumen berupa larik (array), ditemukan '${dt(got)}'`
+        : `'data.dari<T>()' expects an array argument, got '${dt(got)}'`;
+      return e('TypeError', msg, line, col);
+    },
+
     gabungNeedsPada(line, col) {
       const msg = isID
         ? `'.gabung()' butuh argumen 'pada: kondisi' untuk menentukan kondisi join`

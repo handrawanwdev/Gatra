@@ -207,14 +207,14 @@ class Lexer {
           continue;
         }
 
-        if (word in KEYWORD_MAP) {
+        if (Object.hasOwn(KEYWORD_MAP, word)) {
           const canonical = KEYWORD_MAP[word];
           if (canonical === 'true' || canonical === 'false') {
             this.emit(T.BOOL, canonical === 'true', line, col);
           } else {
             this.emit(T.KEYWORD, canonical, line, col);
           }
-        } else if (word in TYPE_MAP) {
+        } else if (Object.hasOwn(TYPE_MAP, word)) {
           this.emit(T.TYPE, TYPE_MAP[word], line, col);
         } else {
           this.emit(T.IDENTIFIER, word, line, col);

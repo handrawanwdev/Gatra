@@ -95,7 +95,7 @@ pub fn filter_simple(rows: &[Value], desc: &FilterDesc, workers: usize) -> Vec<V
     })
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 struct NumAcc {
     sum: f64,
     count: u64,
@@ -258,6 +258,149 @@ pub fn agregat_native(
     serde_json::to_string(&out).map_err(|e| Error::from_reason(format!("failed to serialize result: {e}")))
 }
 
+// ── Columnar group+aggregate ────────────────────────────────────────────────
+//
+// `agregat_native` above pays for a JSON round trip of the *entire row set*
+// in both directions: serde_json::Value builds one heap-allocated
+// Map<String, Value> per row on the way in, and the result gets
+// stringified/re-parsed on the way out. Benchmarked against the optimized
+// pure-JS path (dataset.js's jsKelompokAgregat) at 2M rows, that made
+// `agregat_native` slower than JS, not faster — the FFI text-serialization
+// cost dominated the (trivially cheap) aggregation work itself.
+//
+// This is the columnar alternative `dataset.js`'s tryNativeAgregatKolom()
+// tries first — two zero-copy typed-array views, nothing parsed:
+//   - `num_data`: every numeric aggregate column, flattened row-major, as a
+//     `Float64Array` (`num_data[row * field_count + field]`).
+//   - `group_idx`: the group-by column, dictionary-encoded — dataset.js
+//     assigns each distinct group value a small integer as it scans rows, so
+//     what crosses the FFI per row is one `u32` (a `Uint32Array`), not a
+//     string. Only the *distinct* values (`dict`, typically a handful) ever
+//     cross as actual `Vec<String>` — a first cut of this (git history)
+//     shipped `Vec<String>` per row instead and was still ~4.6x slower than
+//     the JS path at 2M rows: one N-API string conversion per row turned out
+//     to be the dominant cost, not JSON. Dictionary coding removes it.
+// Groups are then just `Vec<NumAcc>` indexed by that integer — no hashing,
+// no key cloning, per row. dataset.js only takes this path for ≤1 group
+// field with plain-number aggregate fields; anything wider still runs
+// correctly through `agregat_native`'s general JSON path instead.
+
+/// One partition's local group-by over an index range — mirrors
+/// `local_aggregate()`'s role for the row-object path, but keyed by the
+/// dictionary index instead of a hashed/cloned string. `num_data` is the
+/// *full* row-major array; `range` is this partition's row-index slice into
+/// it and into `group_idx`, not a separate copy of either.
+fn local_aggregate_indexed(
+    group_idx: &[u32],
+    has_group: bool,
+    n_groups: usize,
+    num_data: &[f64],
+    field_count: usize,
+    range: std::ops::Range<usize>,
+) -> Vec<(u64, Vec<NumAcc>)> {
+    let mut groups: Vec<(u64, Vec<NumAcc>)> =
+        (0..n_groups).map(|_| (0, (0..field_count).map(|_| NumAcc::new()).collect())).collect();
+    for i in range {
+        let g = if has_group { group_idx[i] as usize } else { 0 };
+        groups[g].0 += 1;
+        let base = i * field_count;
+        for (f, acc) in groups[g].1.iter_mut().enumerate() {
+            let v = num_data[base + f];
+            if !v.is_nan() {
+                acc.push(v);
+            }
+        }
+    }
+    groups
+}
+
+fn aggregate_indexed(
+    group_idx: &[u32],
+    has_group: bool,
+    dict_len: usize,
+    num_data: &[f64],
+    field_count: usize,
+    row_count: usize,
+    workers: usize,
+) -> Vec<(u64, Vec<NumAcc>)> {
+    let n_groups = if has_group { dict_len } else { 1 };
+    if row_count == 0 {
+        return (0..n_groups).map(|_| (0, (0..field_count).map(|_| NumAcc::new()).collect())).collect();
+    }
+
+    let chunk_size = row_count.div_ceil(workers.max(1)).max(1);
+    let ranges: Vec<std::ops::Range<usize>> = (0..row_count)
+        .step_by(chunk_size)
+        .map(|start| start..(start + chunk_size).min(row_count))
+        .collect();
+
+    let partials: Vec<Vec<(u64, Vec<NumAcc>)>> = run_with_pool(workers, || {
+        ranges
+            .par_iter()
+            .cloned()
+            .map(|r| local_aggregate_indexed(group_idx, has_group, n_groups, num_data, field_count, r))
+            .collect()
+    });
+
+    let mut merged: Vec<(u64, Vec<NumAcc>)> =
+        (0..n_groups).map(|_| (0, (0..field_count).map(|_| NumAcc::new()).collect())).collect();
+    for partial in partials {
+        for (g, (count, accs)) in partial.into_iter().enumerate() {
+            merged[g].0 += count;
+            for (i, a) in accs.iter().enumerate() {
+                merged[g].1[i].merge(a);
+            }
+        }
+    }
+    merged
+}
+
+#[napi]
+pub fn agregat_kolom(
+    group_field_name: String,
+    dict: Vec<String>,
+    group_idx: Uint32Array,
+    num_field_names: Vec<String>,
+    num_data: Float64Array,
+    row_count: u32,
+    spec_json: String,
+    workers: u32,
+) -> Result<String> {
+    let spec: BTreeMap<String, AggSpecEntry> = serde_json::from_str(&spec_json)
+        .map_err(|e| Error::from_reason(format!("spec_json invalid: {e}")))?;
+
+    let has_group = !group_field_name.is_empty();
+    let field_count = num_field_names.len();
+    let row_count = row_count as usize;
+    let idx_slice: &[u32] = &group_idx;
+    let num_slice: &[f64] = &num_data;
+
+    let groups =
+        aggregate_indexed(idx_slice, has_group, dict.len(), num_slice, field_count, row_count, workers as usize);
+
+    let out: Vec<Value> = groups
+        .into_iter()
+        .enumerate()
+        .map(|(g, (count, accs))| {
+            let mut obj = Map::new();
+            if has_group {
+                obj.insert(group_field_name.clone(), Value::String(dict[g].clone()));
+            }
+            for (name, agg) in &spec {
+                let acc = agg
+                    .field
+                    .as_ref()
+                    .and_then(|f| num_field_names.iter().position(|x| x == f))
+                    .map(|i| &accs[i]);
+                obj.insert(name.clone(), compute_from_acc(&agg.func, count, acc));
+            }
+            Value::Object(obj)
+        })
+        .collect();
+
+    serde_json::to_string(&out).map_err(|e| Error::from_reason(format!("failed to serialize result: {e}")))
+}
+
 #[napi]
 pub fn saring_native(rows_json: String, desc_json: String, workers: u32) -> Result<String> {
     let rows: Vec<Value> = serde_json::from_str(&rows_json)
@@ -403,5 +546,111 @@ mod tests {
         fused.sort_by(|a, b| a["negara"].as_str().cmp(&b["negara"].as_str()));
         separate.sort_by(|a, b| a["negara"].as_str().cmp(&b["negara"].as_str()));
         assert_eq!(fused, separate);
+    }
+
+    /// Dictionary-encodes (group_idx, dict, num_data row-major, row_count)
+    /// from the same shape of fixture the row-object tests above use — the
+    /// same encoding dataset.js's buildColumnsForNative() does — so the
+    /// indexed path can be checked against `aggregate()` on identical data.
+    fn to_indexed(rows: &[(&str, f64)]) -> (Vec<u32>, Vec<String>, Vec<f64>, usize) {
+        let mut dict: Vec<String> = Vec::new();
+        let mut group_idx = Vec::with_capacity(rows.len());
+        for (g, _) in rows {
+            let idx = match dict.iter().position(|x| x == g) {
+                Some(i) => i,
+                None => { dict.push(g.to_string()); dict.len() - 1 }
+            };
+            group_idx.push(idx as u32);
+        }
+        let num_data = rows.iter().map(|(_, v)| *v).collect();
+        (group_idx, dict, num_data, rows.len())
+    }
+
+    /// The whole point of the indexed path: it must agree with the
+    /// row-object path (`aggregate()`) on the same data, not just be fast.
+    #[test]
+    fn aggregate_indexed_matches_aggregate() {
+        let negara = ["ID", "US", "SG", "JP", "IN"];
+        let fixture: Vec<(&str, f64)> = (0..50_000)
+            .map(|i| (negara[i % negara.len()], ((i * 37) % 1000) as f64 - 500.0))
+            .collect();
+        let spec = spec_hitung_jumlah_rata();
+
+        let rows: Vec<Value> = fixture.iter().map(|(g, v)| json!({ "negara": g, "jumlah": v })).collect();
+        let mut expected = aggregate(&rows, &["negara".to_string()], &spec, 4);
+        expected.sort_by(|a, b| a["negara"].as_str().cmp(&b["negara"].as_str()));
+
+        let (group_idx, dict, num_data, row_count) = to_indexed(&fixture);
+        let groups = aggregate_indexed(&group_idx, true, dict.len(), &num_data, 1, row_count, 4);
+        let mut out: Vec<Value> = groups
+            .into_iter()
+            .enumerate()
+            .map(|(g, (count, accs))| {
+                let mut obj = Map::new();
+                obj.insert("negara".to_string(), Value::String(dict[g].clone()));
+                for (name, agg) in &spec {
+                    let acc = agg.field.as_ref().map(|_| &accs[0]); // single numeric field ("jumlah") at index 0
+                    obj.insert(name.clone(), compute_from_acc(&agg.func, count, acc));
+                }
+                Value::Object(obj)
+            })
+            .collect();
+        out.sort_by(|a, b| a["negara"].as_str().cmp(&b["negara"].as_str()));
+        assert_eq!(out, expected);
+    }
+
+    /// §25 Semantic Guarantee, indexed-columnar side.
+    #[test]
+    fn aggregate_indexed_matches_across_worker_counts() {
+        let negara = ["ID", "US", "SG", "JP", "IN"];
+        let fixture: Vec<(&str, f64)> = (0..50_000)
+            .map(|i| (negara[i % negara.len()], ((i * 37) % 1000) as f64 - 500.0))
+            .collect();
+        let (group_idx, dict, num_data, row_count) = to_indexed(&fixture);
+
+        let baseline = aggregate_indexed(&group_idx, true, dict.len(), &num_data, 1, row_count, 1);
+        for workers in [2usize, 4, 8, 16] {
+            let out = aggregate_indexed(&group_idx, true, dict.len(), &num_data, 1, row_count, workers);
+            assert_eq!(out, baseline, "workers={workers} produced a different result than workers=1");
+        }
+    }
+
+    /// A NaN in the numeric column is the "no value" sentinel (dataset.js
+    /// writes it for undefined/null fields) — must be excluded from
+    /// sum/count/min/max exactly like a missing field in the row-object
+    /// path, not propagate as NaN into the aggregate.
+    #[test]
+    fn aggregate_indexed_skips_nan_sentinel() {
+        let group_idx = vec![0u32, 0, 0];
+        let num_data = vec![10.0, f64::NAN, 30.0];
+        let groups = aggregate_indexed(&group_idx, true, 1, &num_data, 1, 3, 4);
+        let (count, accs) = &groups[0];
+        assert_eq!(*count, 3); // hitung() counts rows, NaN row included
+        assert_eq!(accs[0].count, 2); // jumlah()/rata_rata() only see the 2 real values
+        assert_eq!(accs[0].sum, 40.0);
+    }
+
+    /// No group field (global aggregate) over zero rows must still yield
+    /// exactly one all-zero group — same rule `aggregate()` enforces for
+    /// the row-object path.
+    #[test]
+    fn aggregate_indexed_empty_global_yields_one_group() {
+        let groups = aggregate_indexed(&[], false, 0, &[], 1, 0, 4);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, 0);
+    }
+
+    /// Two distinct group values sharing the same dictionary index would be
+    /// a silent data-corruption bug (rows from different groups merged into
+    /// one) — pin down that each dictionary entry stays in its own bucket.
+    #[test]
+    fn aggregate_indexed_keeps_distinct_groups_separate() {
+        let group_idx = vec![0u32, 1, 0, 1, 1];
+        let num_data = vec![1.0, 10.0, 2.0, 20.0, 30.0];
+        let groups = aggregate_indexed(&group_idx, true, 2, &num_data, 1, 5, 4);
+        assert_eq!(groups[0].0, 2);
+        assert_eq!(groups[0].1[0].sum, 3.0);
+        assert_eq!(groups[1].0, 3);
+        assert_eq!(groups[1].1[0].sum, 60.0);
     }
 }

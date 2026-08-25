@@ -2639,6 +2639,12 @@ run('parse: data.baca<T>(path) attaches typeArg to the MemberExpr callee', () =>
   assertEqual(ast.body[0].value.callee.typeArg, 'Transaksi');
 });
 
+run("parse: data.dari<T>(larik) attaches typeArg — 'dari' is a keyword ('impor ... dari') everywhere else", () => {
+  const ast = parse(tokenize('isi t = data.dari<Transaksi>(daftar)'));
+  assertEqual(ast.body[0].value.callee.member, 'dari');
+  assertEqual(ast.body[0].value.callee.typeArg, 'Transaksi');
+});
+
 run('parse: nama: expr inside a call becomes a NamedArg', () => {
   const ast = parse(tokenize('isi h = t.gabung(u, pada: .a == .b)'));
   const namedArg = ast.body[0].value.args[1];
@@ -2681,6 +2687,18 @@ run('typechecker: full canonical pipeline (saring/pilih/kelompok/agregat/tulis) 
   laporan.tulis("hasil.json")`);
 });
 
+run("typechecker: data.dari<T>(larik) accepts an array argument and produces data<T>", () => {
+  const ast = parse(tokenize(`struktur X { a: angka }
+  isi daftar: X[] = [X { a: 1 }]
+  isi t = data.dari<X>(daftar)`));
+  typecheck(ast, 'id');
+  assertEqual(ast.body[2].value._type, 'data<X>');
+});
+
+run("typechecker: data.dari<T>() rejects a non-array argument", () => {
+  assertThrows(() => tc('isi n = 5\nisi t = data.dari<X>(n)'), "larik");
+});
+
 run("typechecker: '.pilih()' rejects a non-field-reference argument", () => {
   assertThrows(() => tc('isi t = data.baca<X>("x.json")\nisi p = t.pilih(1)'), "'pilih()'");
 });
@@ -2708,6 +2726,11 @@ run("typechecker: .kumpulkan() widens data<T> back to T[]", () => {
 run('codegen: data.baca<T>(path) compiles to __gatra_data__.baca(path)', () => {
   const js = compile('isi t = data.baca<X>("x.json")');
   assert(js.includes('__gatra_data__.baca("x.json")'), js);
+});
+
+run('codegen: data.dari<T>(larik) compiles to __gatra_data__.dari(larik)', () => {
+  const js = compile('struktur X { a: angka }\nisi daftar: X[] = [X { a: 1 }]\nisi t = data.dari<X>(daftar)');
+  assert(js.includes('__gatra_data__.dari(daftar)'), js);
 });
 
 run('codegen: .saring(.a > 0) compiles to an implicit-record arrow function', () => {
@@ -2750,9 +2773,10 @@ run("codegen: data<T> in a 'paket' file also fails clearly (paket forces 'export
   );
 });
 
-run('codegen: dataset runtime prelude is only emitted when data.baca/data.alir is actually used', () => {
+run('codegen: dataset runtime prelude is only emitted when data.baca/data.alir/data.dari is actually used', () => {
   assert(!compile('isi x = 1').includes('__gatra_data__'));
   assert(compile('isi t = data.baca<X>("x.json")').includes("require("));
+  assert(compile('struktur X { a: angka }\nisi daftar: X[] = [X { a: 1 }]\nisi t = data.dari<X>(daftar)').includes("require("));
 });
 
 // -- end-to-end execution (real files, real subprocess) --
@@ -2781,6 +2805,84 @@ run('executes: canonical saring/pilih/kelompok/agregat pipeline produces the rig
     assert(out.includes('negara: \'US\''), out);
     assert(out.includes('total: 2'), out);
     assert(out.includes('pendapatan: 350'), out);
+  });
+});
+
+run('executes: data.dari(larik) wraps an in-memory larik<T> as data<T> — no disk round-trip needed', () => {
+  withDatasetFixture({}, (dir) => {
+    const out = execDataset(`
+      struktur Transaksi {
+        negara: teks
+        jumlah: angka
+      }
+      isi daftar: Transaksi[] = [
+        Transaksi { negara: "ID", jumlah: 100 },
+        Transaksi { negara: "ID", jumlah: -20 },
+        Transaksi { negara: "US", jumlah: 300 },
+        Transaksi { negara: "US", jumlah: 50 }
+      ]
+      isi transaksi = data.dari<Transaksi>(daftar)
+      isi laporan = transaksi
+          .saring(.jumlah > 0)
+          .kelompok(.negara)
+          .agregat({
+              total: hitung()
+              pendapatan: jumlah(.jumlah)
+          })
+      cetak(laporan.kumpulkan())
+    `, dir);
+    assert(out.includes('negara: \'ID\''), out);
+    assert(out.includes('total: 1'), out);
+    assert(out.includes('pendapatan: 100'), out);
+    assert(out.includes('negara: \'US\''), out);
+    assert(out.includes('total: 2'), out);
+    assert(out.includes('pendapatan: 350'), out);
+  });
+});
+
+// Forces the columnar native path (native-engine's agregat_kolom, wired
+// through dataset.js's tryNativeAgregatKolom): row count above
+// NATIVE_ROW_THRESHOLD plus an explicit .paralel() hint. Asserts
+// engine=native (proves the fast path actually ran, not a silent fallback
+// to JSON-based native or JS) alongside hand-computed totals, min/max, and
+// average across 3 groups — the group-value dictionary encoding is only
+// exercised with more than one distinct value here.
+run('executes: data.dari() + .paralel() takes the columnar native path (agregat_kolom) for a big enough in-memory larik', () => {
+  withDatasetFixture({}, (dir) => {
+    const out = execDataset(`
+      struktur X {
+        kategori: teks
+        v: angka
+      }
+      fungsi buatData(n: angka): X[] {
+        isi hasil = [X { kategori: "A", v: 0 }]
+        isi i = 1
+        selama i < n {
+          isi k = "A"
+          jika i > (n / 3) { k = "B" }
+          jika i > (2 * n / 3) { k = "C" }
+          isi baris = X { kategori: k, v: i }
+          hasil.push(baris)
+          i = i + 1
+        }
+        balik hasil
+      }
+      isi daftar = buatData(3000)
+      isi t = data.dari<X>(daftar)
+      isi laporan = t
+        .paralel(4)
+        .kelompok(.kategori)
+        .agregat({ total: hitung(), jml: jumlah(.v), mn: minimum(.v), mx: maksimum(.v) })
+      isi stat = laporan.statistik()
+      cetak("engine=" + stat.engine)
+      cetak(laporan.kumpulkan())
+    `, dir);
+    assert(out.includes('engine=native'), out);
+    assert(out.includes(`kategori: 'A'`), out);
+    assert(out.includes('total: 1001'), out); // v = 0..1000 inclusive
+    assert(out.includes('jml: 500500'), out); // sum(0..1000)
+    assert(out.includes(`kategori: 'C'`), out);
+    assert(out.includes('mx: 2999'), out);
   });
 });
 

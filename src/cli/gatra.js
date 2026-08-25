@@ -85,8 +85,13 @@ function formatError(err, source, filePath) {
 // ── ES Module runner ──────────────────────────────────────────────────────────
 
 function runEsm(sourceFile, js, _sourceCode) {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "gatra_"));
   const sourceDir = path.dirname(path.resolve(sourceFile));
+  // Compiled output runs from inside sourceDir (not os.tmpdir()) so bare
+  // npm-package imports ('impor { X } dari "paket-npm"') resolve against
+  // the real project's node_modules the way Node normally walks up parent
+  // directories looking for one — a systemwide temp dir has no ancestor
+  // node_modules to find. Removed in the 'finally' below either way.
+  const tmpDir = fs.mkdtempSync(path.join(sourceDir, ".gatra_tmp_"));
 
   try {
     const localMgRe = /from ("\.\.?\/[^"]+\.gatra")/g;

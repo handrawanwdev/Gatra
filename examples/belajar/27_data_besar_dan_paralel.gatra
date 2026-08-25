@@ -1,0 +1,172 @@
+// 27_data_besar_dan_paralel.gatra — data<T> (Big Data primitive), Automatic
+// Parallel Execution, dan Execution Decision digabung jadi satu file
+// (lihat BIGDATA_TYPE.md, Automatic_Parallel_Execution.md §1, §5-6, §19-21,
+// §24). Gabungan dari 27_data_besar / 28_eksekusi_paralel /
+// 29a_keputusan_v8_dan_io / 29b_keputusan_native / 30_fusi_dan_proyeksi.
+// Jalankan dari folder ini supaya "27_transaksi.json" dkk. ketemu.
+//
+// 'impor' (di bawah) memaksa output jadi ES module, sementara data<T> butuh
+// require() — makanya dulu dipisah jadi 29a/29b. Digabung di sini karena
+// codegen.js sekarang mengganti prelude data<T> ke varian createRequire()
+// saat file punya 'impor' top-level (lihat DATASET_PRELUDE_ESM).
+
+impor tempo dari "node:timers/promises"
+
+struktur Transaksi {
+  negara: teks
+  jumlah: angka
+  pengguna_id: angka
+}
+
+struktur TransaksiLuas {
+  negara: teks
+  jumlah: angka
+  pengguna_id: angka
+  email: teks
+  catatan: teks
+}
+
+// ── §1: data<T> dasar (ex-27_data_besar.gatra) ──────────────────────────
+fungsi bagianDasar(): tiada {
+  isi transaksi = data.baca<Transaksi>("27_transaksi.json")
+
+  isi laporan = transaksi
+    .saring(.jumlah > 0)          // buang transaksi negatif
+    .pilih(.negara, .jumlah)      // proyeksi kolom
+    .kelompok(.negara)            // group by negara
+    .agregat({
+      total: hitung()
+      pendapatan: jumlah(.jumlah)
+      rata_rata: rata_rata(.jumlah)
+    })
+  cetak(laporan.kumpulkan())
+
+  isi diurut = transaksi
+    .urutkan(.jumlah, menurun)
+    .ambil(2)
+    .kumpulkan()
+  cetak(diurut)
+
+  isi statistik = transaksi.statistik()
+  cetak(statistik.baris)
+}
+
+// ── §2: otomatis vs .paralel() eksplisit (ex-28_eksekusi_paralel.gatra) ─
+fungsi bagianParalel(): tiada {
+  isi transaksi = data.baca<Transaksi>("28_transaksi.json")
+
+  // Tanpa .paralel(): otomatis, runtime yang mutuskan (di dataset kecil ini,
+  // itu V8 — lihat NATIVE_ROW_THRESHOLD di src/runtime/dataset.js).
+  isi otomatis = transaksi
+    .saring(.jumlah > 0)
+    .kelompok(.negara)
+    .agregat({
+      total: hitung()
+      pendapatan: jumlah(.jumlah)
+    })
+  cetak(otomatis.kumpulkan())
+
+  // Dengan .paralel(4): hint eksplisit — programmer minta runtime coba
+  // ~4 lane. Ini yang memaksa jalur native (rayon thread pool asli).
+  isi manual = transaksi
+    .paralel(4)
+    .saring(.jumlah > 0)
+    .kelompok(.negara)
+    .agregat({
+      total: hitung()
+      pendapatan: jumlah(.jumlah)
+    })
+  cetak(manual.kumpulkan())
+}
+
+// ── §3: Execution Decision, cabang V8 (ex-29a_keputusan_v8_dan_io.gatra) ─
+// Operasi ringan (larik kecil — §5.1 Lightweight Execution) tidak pernah
+// menyentuh FFI/Rust sama sekali: '.filter()'/'.map()' di sini adalah
+// method Array bawaan JavaScript murni, dijalankan langsung oleh V8.
+fungsi cabangV8(): tiada {
+  isi kecil: angka[] = [1, 2, 3, 4, 5]
+  isi hasil = kecil.filter((x) => x > 2).map((x) => x * 10)
+  cetak("[V8] larik kecil, tanpa FFI, tanpa dataset:")
+  cetak(hasil)
+}
+
+// ── §4: Execution Decision, cabang Node.js Async I/O (ex-29a) ───────────
+// I/O (file, network, timer — §5.2) lewat Node event loop, bukan lewat
+// Rust ataupun blocking V8: 'tunggu tempo.setTimeout(...)' menyerahkan
+// kontrol ke event loop selama menunggu, tidak makan satu core CPU pun.
+fungsi asinkron cabangAsyncIO(): tiada {
+  cetak("[Async I/O] menunggu timer 200ms lewat Node event loop...")
+  ukur "[Async I/O] durasi" {
+    tunggu tempo.setTimeout(200)
+  }
+}
+
+// ── §5: Execution Decision, cabang Rust Native Engine (ex-29b) ──────────
+//   Gatra → Execution Planner → Cost Estimator → Execution Decision
+//     ├── V8 / Node.js Async I/O  ← §3/§4 di atas
+//     └── Rust Native Engine → Thread Pool → Multiple CPU Cores  ← di sini
+fungsi asinkron cabangNative(): tiada {
+  isi transaksi = data.baca<Transaksi>("29b_transaksi.json")
+
+  // Tanpa hint: Cost Estimator otomatis (§6) — dataset ini kecil untuk
+  // ukuran "Big Data", jadi runtime pilih V8/JS sendiri. Buktinya ada di
+  // 'engine' hasil '.statistik()', bukan diasumsikan.
+  isi otomatis = transaksi.kelompok(.negara).agregat({ total: hitung() })
+  isi statOtomatis = otomatis.statistik()
+  cetak("[Otomatis, tanpa .paralel()] engine=" + statOtomatis.engine + " workers=" + statOtomatis.workers)
+
+  // Dengan '.paralel(8)': hint eksplisit (§19 "Manual Override") memaksa
+  // Cost Estimator memutuskan Rust Native Engine. '.statistik()'/
+  // '.jelaskan()' melaporkan worker count ASLI dari rayon::ThreadPool
+  // (native-engine/src/lib.rs — run_with_pool()), bukan angka yang dikarang.
+  isi dipaksaNative = transaksi
+    .paralel(8)
+    .saring(.jumlah > 0)
+    .kelompok(.negara)
+    .agregat({ total: hitung(), pendapatan: jumlah(.jumlah) })
+  isi statNative = dipaksaNative.statistik()
+  cetak("[.paralel(8)] engine=" + statNative.engine + " workers=" + statNative.workers)
+  cetak(dipaksaNative.jelaskan())
+}
+
+// ── §6: Fusion & projection pushdown (ex-30_fusi_dan_proyeksi.gatra) ────
+// Dua optimasi di jalur native (.paralel(n)):
+//   1. Fusion — .saring() lalu .kelompok()+.agregat() yang berurutan
+//      dieksekusi dalam SATU panggilan native (saringAgregatNative), bukan
+//      dua panggilan terpisah (§29.7 "Plan Over Calls").
+//   2. Projection pushdown — kolom yang tidak dipakai .saring()/.kelompok()/
+//      .agregat() (di bawah: 'email' dan 'catatan') dibuang SEBELUM
+//      menyeberangi FFI.
+// Dataset di bawah ini 2500 baris — di atas NATIVE_ROW_THRESHOLD (2000,
+// dataset.js) supaya '.paralel(4)' beneran jatuh ke Rust.
+fungsi bagianFusi(): tiada {
+  isi transaksi = data.baca<TransaksiLuas>("30_transaksi.json")
+
+  isi laporan = transaksi
+    .paralel(4)
+    .saring(.jumlah > 0)
+    .kelompok(.negara)
+    .agregat({
+      total: hitung()
+      pendapatan: jumlah(.jumlah)
+    })
+  cetak(laporan.kumpulkan())
+
+  // .jelaskan() (§24 Observability): trace 'saring+kelompok+agregat' satu
+  // baris = satu native call, bukan dua — buktinya bukan diasumsikan.
+  cetak(laporan.jelaskan())
+
+  // .statistik(): engine/workers ASLI dari eksekusi, bukan dikarang.
+  isi stat = laporan.statistik()
+  cetak("engine=" + stat.engine + " workers=" + stat.workers)
+}
+
+fungsi asinkron utama(): tiada {
+  bagianDasar()
+  bagianParalel()
+  cabangV8()
+  tunggu cabangAsyncIO()
+  tunggu cabangNative()
+  bagianFusi()
+}
+utama()
