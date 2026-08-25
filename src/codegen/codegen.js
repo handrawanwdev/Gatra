@@ -16,7 +16,7 @@ const DATASET_PRELUDE = `const { data: __gatra_data__ } = require(${JSON.stringi
 
 const DATASET_METHODS = new Set([
   'saring', 'pilih', 'ubah', 'kelompok', 'agregat', 'gabung', 'urutkan',
-  'bagi', 'paralel', 'terdistribusi', 'jendela', 'ambil', 'kumpulkan', 'tulis', 'statistik',
+  'bagi', 'paralel', 'terdistribusi', 'jendela', 'ambil', 'kumpulkan', 'tulis', 'statistik', 'jelaskan',
 ]);
 const DATASET_JOIN_VARIANTS = new Set(['dalam', 'kiri', 'kanan', 'penuh']);
 const DATASET_AGG_FNS = new Set(['hitung', 'jumlah', 'rata_rata', 'minimum', 'maksimum']);

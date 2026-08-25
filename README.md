@@ -1,120 +1,42 @@
 # Gatra
 
-**Bahasa pemrograman statically-typed bersyntax Bahasa Indonesia, dikompilasi ke JavaScript dan berjalan di atas Node.js.**
+> **Bahasa pemrograman dengan sintaks Bahasa Indonesia.**
 
-> Sederhana bahasanya. Bersih kodenya. Luas ekosistemnya.
+Gatra adalah bahasa pemrograman **statically typed** yang dirancang untuk membuat pemrograman terasa lebih sederhana, natural, dan mudah dipahami.
 
-Gatra tidak membuat runtime, VM, garbage collector, atau package manager sendiri — kode Gatra dikompilasi menjadi JavaScript biasa lalu dijalankan Node.js, sehingga tetap kompatibel penuh dengan seluruh ekosistem npm.
+Gatra menggunakan sintaks Bahasa Indonesia, tetapi tetap memanfaatkan kekuatan dan luasnya ekosistem JavaScript.
 
+```text
+Sederhana bahasanya.
+Bersih kodenya.
+Luas ekosistemnya.
 ```
-Gatra → Lexer → Parser → Type Checker → JavaScript Generator → Node.js
-```
-
-Dokumen spesifikasi lengkap bahasa ada di [`PRD.md`](./PRD.md), dan primitive Big Data (`data<T>`) ada di [`BIGDATA_TYPE.md`](./BIGDATA_TYPE.md).
 
 ---
 
-## Fitur singkat
+## Kenapa Gatra?
 
-- Static typing dengan inferensi tipe, keyword bahasa dalam Bahasa Indonesia (`isi`, `fungsi`, `jika`, `untuk`, `struktur`, dst.)
-- Kompilasi langsung ke JavaScript yang mudah dibaca — bukan bytecode/VM tersendiri
-- Interop penuh dengan paket npm (`impor ... dari "express"`)
-- Visibility gaya Go (huruf besar = publik, huruf kecil = internal) — tanpa keyword `export`/`public`
-- `hasil<T, E>` (result type) + `cocok` (pattern matching) untuk error handling eksplisit
-- Linter dan formatter bawaan (`gatra periksa`, `gatra rapikan`)
-- Primitive Big Data (`data<T>`) dengan lazy execution plan, opsional dipercepat lewat native engine Rust
+Bahasa pemrograman modern memiliki kemampuan yang sangat besar, tetapi sintaksnya sering kali terasa jauh dari bahasa yang digunakan sehari-hari.
 
----
+Gatra mencoba membuat kode lebih dekat dengan cara kita memahami instruksi.
 
-## Prasyarat
+Daripada:
 
-| Kebutuhan | Versi | Wajib? |
-|---|---|---|
-| [Node.js](https://nodejs.org) | 18 LTS ke atas | Ya |
-| npm | ikut bawaan Node.js | Ya |
-| [Rust](https://www.rust-lang.org/tools/install) (`cargo`) | edisi 2021 ke atas | Tidak — opsional, lihat di bawah |
+```javascript
+const name = "Gatra";
 
-Gatra murni berjalan di atas Node.js — tidak perlu instalasi lain. Rust cuma dibutuhkan kalau `npm install` tidak menemukan binary native prebuilt yang cocok untuk platform kamu (lihat bagian **Native engine** di bawah); tanpa Rust sekalipun, fitur `data<T>` tetap jalan penuh lewat fallback JavaScript murni, cuma tanpa percepatan native.
-
----
-
-## Native engine (opsional, cross-platform)
-
-`data<T>` (lihat [`BIGDATA_TYPE.md`](./BIGDATA_TYPE.md)) punya dua operasi yang bisa dipercepat lewat native engine Rust (`native-engine/`): `.kelompok()`+`.agregat()` (group-by + aggregate), dan bentuk sederhana `.saring(.field OP literal)`. Ini murni opsional — semua operasi tetap benar dan lengkap lewat fallback JavaScript (`src/runtime/dataset.js`) kalau native engine tidak aktif.
-
-Binary native prebuilt sudah disertakan di repo ini untuk:
-
-| Platform | Target |
-|---|---|
-| Linux x64 (glibc) | `linux-x64-gnu` |
-| Linux x64 (musl, mis. Alpine) | `linux-x64-musl` |
-| Linux ARM64 (glibc) | `linux-arm64-gnu` |
-| Linux ARM64 (musl) | `linux-arm64-musl` |
-
-`npm install` otomatis mendeteksi platform kamu (`native-engine/platform-target.js`, termasuk deteksi glibc vs musl lewat `process.report`) dan langsung memakai binary yang cocok — tidak ada langkah tambahan.
-
-**Windows dan macOS** belum punya binary prebuilt yang ikut ter-commit (butuh toolchain resmi tiap platform — MSVC untuk Windows, Xcode untuk macOS — yang tidak bisa di-cross-compile dari Linux). Ada dua cara mengaktifkannya di platform itu:
-
-1. **Lewat CI** (direkomendasikan) — workflow [`​.github/workflows/native-engine.yml`](./.github/workflows/native-engine.yml) sudah disiapkan: build native di runner Windows/macOS asli (`windows-latest`, `macos-13` Intel, `macos-14` Apple Silicon) lalu commit hasilnya balik ke `native-engine/`. Jalankan sekali lewat tab Actions (workflow_dispatch) di GitHub setelah repo ini di-push ke sana, atau otomatis tiap ada perubahan di `native-engine/**`.
-2. **Build lokal** — kalau Rust ter-install di komputar Windows/macOS kamu, `npm install` akan mem-build sendiri (`scripts/build-native.js`) tanpa langkah manual tambahan.
-
-Tanpa keduanya, Windows/macOS tetap 100% fungsional lewat fallback JavaScript — cuma tanpa percepatan native untuk dua operasi di atas.
-
----
-
-## Instalasi
-
-Gatra belum dipublikasikan ke npm registry — jalankan dari source:
-
-```bash
-git clone <url-repo-ini> gatra
-cd gatra
-npm install
+if (version === 1) {
+  console.log("Versi pertama");
+} else {
+  console.log("Versi lain");
+}
 ```
 
-`npm install` otomatis:
-1. Memasang dependensi Node.js.
-2. Mencoba mem-build native engine Rust (`scripts/build-native.js`) — kalau `cargo` tidak ditemukan di PATH, langkah ini otomatis dilewati dengan notice, dan `npm install` tetap berhasil.
-
-Tidak ada langkah manual tambahan yang dibutuhkan setelah `npm install` selesai.
-
-### Menjalankan CLI
-
-Tanpa instalasi global, panggil langsung lewat `node`:
-
-```bash
-node src/cli/gatra.js bantuan
-```
-
-Atau, supaya bisa memanggil `gatra` langsung dari mana saja di komputer ini:
-
-```bash
-npm link
-gatra bantuan
-```
-
-(`npm link` membuat symlink global `gatra` yang mengarah ke `src/cli/gatra.js` di clone ini — cukup dijalankan sekali. Lepas lagi dengan `npm unlink -g gatra` kalau perlu.)
-
----
-
-## Quick start
-
-```bash
-gatra buat proyek-saya
-cd proyek-saya
-gatra jalankan utama.gatra
-```
-
-`gatra buat` membuat folder proyek baru berisi `package.json` dan `utama.gatra` contoh ("Halo, proyek-saya!"). `gatra jalankan` mengompilasi lalu langsung menjalankannya di Node.js — tanpa perlu langkah build terpisah.
-
-### Contoh kode
+Gatra menggunakan:
 
 ```gatra
 isi nama: teks = "Gatra"
 isi versi: angka = 1
-
-cetak("Halo, Dunia!")
-cetak("Nama bahasa: ", nama)
 
 jika (versi == 1) {
     cetak("Versi pertama")
@@ -123,59 +45,227 @@ jika (versi == 1) {
 }
 ```
 
-Lebih banyak contoh berjenjang (dari dasar sampai lanjut) ada di [`examples/belajar/`](./examples/belajar).
+Tujuannya bukan sekadar menerjemahkan keyword bahasa pemrograman.
+
+Gatra ingin membangun pengalaman pemrograman yang terasa **lebih familiar, jelas, dan mudah dibaca**.
 
 ---
 
-## Perintah CLI
+## Filosofi Gatra
 
-| Perintah | Keterangan |
-|---|---|
-| `gatra buat <nama>` | Buat proyek baru |
-| `gatra jalankan <file>` | Kompilasi dan langsung jalankan file `.gatra` |
-| `gatra bangun <file> [output] [--samar]` | Kompilasi satu file ke `.js` |
-| `gatra bundel <entry> [output] [--samar]` | Bundle seluruh dependensi ke satu file `.js` |
-| `gatra bangun-proyek <dir> [dist] [--samar]` | Kompilasi seluruh proyek |
-| `gatra uji <file>` | Jalankan blok `uji "..." { ... }` di dalam file |
-| `gatra periksa <file>` | Analisis statis (linter) |
-| `gatra rapikan <file> [--tulis]` | Format kode — cetak ke stdout, atau `--tulis` untuk menimpa file |
-| `gatra versi` | Tampilkan versi compiler |
-| `gatra bantuan` | Tampilkan bantuan ini |
+Gatra dibangun berdasarkan beberapa prinsip sederhana.
 
-Flag `--samar` menghasilkan kode yang disamarkan (identifier dienkripsi, string diubah ke unicode).
+### Bahasa yang mudah dipahami
 
-Gatra tidak punya package manager sendiri — dependensi npm dikelola langsung lewat `npm install`/`npm update`/`npm uninstall` seperti biasa.
+Kode seharusnya dapat dibaca tanpa harus menghafalkan terlalu banyak istilah asing.
+
+```gatra
+jika pengguna.aktif {
+    cetak("Selamat datang")
+}
+```
+
+Kode dapat dibaca seperti instruksi.
 
 ---
 
-## Menjalankan test suite
+### Tetap serius untuk membangun software
+
+Mudah dibaca bukan berarti sederhana secara kemampuan.
+
+Gatra dirancang untuk mendukung pengembangan aplikasi nyata dengan:
+
+- Static typing
+- Type inference
+- Struktur data
+- Fungsi
+- Module
+- Error handling
+- Pattern matching
+- Big Data primitive
+- dan kemampuan modern lainnya
+
+---
+
+### Memanfaatkan ekosistem yang sudah ada
+
+Gatra tidak ingin developer harus meninggalkan ekosistem JavaScript yang sudah sangat luas.
+
+Gatra dapat memanfaatkan package dan library JavaScript yang sudah tersedia.
+
+Dengan begitu, developer mendapatkan pengalaman bahasa baru tanpa kehilangan ekosistem yang sudah mereka kenal.
+
+---
+
+# ✨ Fitur
+
+### 🇮🇩 Sintaks Bahasa Indonesia
+
+Keyword utama menggunakan Bahasa Indonesia sehingga kode terasa lebih natural bagi developer Indonesia.
+
+```gatra
+isi nama: teks = "Handrawan"
+
+jika nama == "Handrawan" {
+    cetak("Halo!")
+}
+```
+
+---
+
+### 🔒 Static Typing
+
+Gatra menggunakan static typing untuk membantu menangkap kesalahan lebih awal.
+
+```gatra
+isi umur: angka = 25
+isi nama: teks = "Gatra"
+```
+
+Tipe juga dapat diinferensikan ketika tidak ditulis secara eksplisit.
+
+---
+
+### 🧩 Ekosistem JavaScript
+
+Gatra tetap berada dekat dengan JavaScript.
+
+Developer dapat memanfaatkan library dan package yang sudah tersedia di ekosistem JavaScript dan npm.
+
+Artinya, Gatra tidak mengharuskan developer membangun semuanya dari awal.
+
+---
+
+### 🎯 Error Handling yang Jelas
+
+Gatra menyediakan pendekatan eksplisit untuk menangani hasil operasi yang dapat berhasil maupun gagal.
+
+Konsep seperti:
+
+```text
+hasil<T, E>
+```
+
+membuat alur error lebih jelas dan mudah ditelusuri.
+
+---
+
+### 🔀 Pattern Matching
+
+Gatra menyediakan `cocok` untuk menangani beberapa kemungkinan nilai dengan cara yang lebih terstruktur.
+
+Hal ini membuat kode yang memiliki banyak kondisi menjadi lebih mudah dibaca.
+
+---
+
+### 📊 Big Data
+
+Gatra juga dirancang dengan perhatian terhadap pengolahan data dalam jumlah besar.
+
+Primitive:
+
+```text
+data<T>
+```
+
+menjadi fondasi untuk pengolahan data menggunakan pendekatan yang lebih deklaratif dan dapat dioptimalkan.
+
+---
+
+# 🧑‍💻 Contoh
+
+Program sederhana:
+
+```gatra
+isi nama: teks = "Gatra"
+
+cetak("Halo, ", nama)
+```
+
+Fungsi:
+
+```gatra
+fungsi tambah(a: angka, b: angka): angka {
+    kembali a + b
+}
+
+isi hasil = tambah(10, 20)
+
+cetak(hasil)
+```
+
+Struktur:
+
+```gatra
+struktur Pengguna {
+    Nama: teks
+    umur: angka
+}
+
+isi pengguna = Pengguna {
+    Nama: "Budi",
+    umur: 25
+}
+
+cetak(pengguna.Nama)
+```
+
+Kode Gatra dirancang agar dapat dibaca dengan cepat bahkan ketika kita baru pertama kali melihatnya.
+
+---
+
+# 🌱 Untuk Siapa?
+
+Gatra ditujukan untuk siapa saja yang ingin mempelajari atau membangun software dengan bahasa yang lebih dekat dengan Bahasa Indonesia.
+
+### Pemula
+
+Gatra dapat menjadi pintu masuk untuk memahami konsep pemrograman tanpa harus langsung berhadapan dengan banyak istilah sintaks berbahasa Inggris.
+
+### Developer
+
+Developer yang sudah terbiasa dengan JavaScript atau TypeScript dapat menggunakan konsep yang familiar sambil mendapatkan pengalaman dengan sintaks Gatra.
+
+### Pendidikan
+
+Gatra dapat digunakan sebagai media pembelajaran pemrograman dengan bahasa yang lebih dekat dengan bahasa sehari-hari.
+
+### Eksperimen Bahasa
+
+Gatra juga merupakan eksperimen tentang bagaimana sebuah bahasa pemrograman dapat dirancang dengan Bahasa Indonesia sebagai bagian utama dari sintaksnya.
+
+---
+
+# 🚀 Mulai Menggunakan Gatra
+
+Untuk mencoba Gatra:
 
 ```bash
-npm test
+git clone <url-repository>
+cd gatra
+npm install
 ```
 
-Menjalankan seluruh test compiler (lexer → parser → typechecker → codegen → runtime) di `tests/test.js`.
+Kemudian:
+
+```bash
+gatra buat proyek-saya
+cd proyek-saya
+gatra jalankan utama.gatra
+```
+
+# 🤝 Kontribusi
+
+Gatra adalah proyek terbuka.
+
+Ide, diskusi, eksperimen, laporan bug, dan kontribusi kode sangat diterima.
+
+Jika kamu tertarik dengan bahasa pemrograman, compiler, JavaScript, atau ingin melihat bagaimana bahasa pemrograman dengan sintaks Bahasa Indonesia berkembang, silakan ikut berkontribusi.
 
 ---
 
-## Struktur proyek
+# Gatra
 
-```
-src/
-  lexer/        tokenizer + kamus keyword Bahasa Indonesia
-  parser/       AST parser
-  typechecker/  static type checking
-  codegen/      generator JavaScript
-  formatter/    'gatra rapikan'
-  linter/       'gatra periksa'
-  module/       resolusi impor lokal + visibility gaya Go
-  runtime/      runtime pendukung (mis. data<T>, lihat BIGDATA_TYPE.md)
-  cli/          entry point 'gatra'
-native-engine/  native engine Rust opsional (N-API), lihat Prasyarat di atas
-examples/       contoh kode, termasuk seri belajar di examples/belajar/
-tests/          test suite (npm test)
-```
+**Pemrograman dengan bahasa yang kita pahami.**
 
-## Lisensi
-
-MIT
+_Sederhana bahasanya. Bersih kodenya. Luas ekosistemnya._

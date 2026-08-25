@@ -1,0 +1,46 @@
+// 28_eksekusi_paralel.gatra — Automatic Parallel Execution (Phase 0)
+// (lihat Automatic_Parallel_Execution.md §19-21, §24)
+//
+// Default: runtime pilih jalur tercepat sendiri (biasanya V8/JS — lihat
+// §6 Cost Estimator). '.paralel(n)' adalah hint eksplisit: programmer minta
+// runtime pertimbangkan ~n lane, dan itu yang menyalakan rayon thread pool
+// asli di native-engine/. Jalankan dari folder ini supaya "28_transaksi.json"
+// ketemu.
+
+struktur Transaksi {
+  negara: teks
+  jumlah: angka
+  pengguna_id: angka
+}
+
+isi transaksi = data.baca<Transaksi>("28_transaksi.json")
+
+// Tanpa .paralel(): otomatis, runtime yang mutuskan (di dataset kecil ini,
+// itu V8 — lihat NATIVE_ROW_THRESHOLD di src/runtime/dataset.js).
+isi otomatis = transaksi
+  .saring(.jumlah > 0)
+  .kelompok(.negara)
+  .agregat({
+    total: hitung()
+    pendapatan: jumlah(.jumlah)
+  })
+cetak(otomatis.kumpulkan())
+
+// Dengan .paralel(4): hint eksplisit — programmer minta runtime coba
+// ~4 lane. Ini yang memaksa jalur native (rayon thread pool asli).
+isi manual = transaksi
+  .paralel(4)
+  .saring(.jumlah > 0)
+  .kelompok(.negara)
+  .agregat({
+    total: hitung()
+    pendapatan: jumlah(.jumlah)
+  })
+
+// .jelaskan() (§24): execution plan asli — operator apa saja yang jalan,
+// engine (js/native), dan berapa worker yang beneran dipakai.
+// cetak(manual.jelaskan())
+
+// .statistik() (§24): angka eksekusi asli (bukan estimasi) — execution_time_ms,
+// workers, engine.
+// cetak(manual.statistik())

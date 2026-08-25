@@ -795,7 +795,7 @@ class TypeChecker {
 
     const DATASET_METHODS = new Set([
       'saring', 'pilih', 'ubah', 'kelompok', 'agregat', 'gabung', 'urutkan',
-      'bagi', 'paralel', 'terdistribusi', 'jendela', 'ambil', 'kumpulkan', 'tulis', 'statistik',
+      'bagi', 'paralel', 'terdistribusi', 'jendela', 'ambil', 'kumpulkan', 'tulis', 'statistik', 'jelaskan',
     ]);
     if (!DATASET_METHODS.has(member)) return undefined;
 
@@ -876,6 +876,10 @@ class TypeChecker {
       case 'statistik':
         for (const a of node.args) this.inferExpr(a);
         return 'unknown';
+
+      case 'jelaskan':
+        for (const a of node.args) this.inferExpr(a);
+        return 'teks';
 
       default:
         return 'unknown';
