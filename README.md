@@ -157,6 +157,81 @@ Hal ini membuat kode yang memiliki banyak kondisi menjadi lebih mudah dibaca.
 
 ---
 
+### 🔁 Konversi Tipe Eksplisit
+
+Kadang nilai perlu diubah dari satu tipe ke tipe lain — misalnya angka dari input jadi teks, atau teks jadi angka. Gatra menyediakan fungsi bawaan untuk itu, namanya jelas dan gampang ditebak:
+
+```gatra
+isi teksAngka = ke_teks(42)        // "42"
+isi angkaAsli = ke_angka("3.5")    // 3.5
+isi dibulatkan = ke_bilangan(9.9)  // 9
+isi angkaDesimal = ke_pecahan("2.25") // 2.25
+isi satuByte = ke_byte(300)        // 44 (dibungkus ke rentang 0-255)
+isi valid = ke_logika("benar")     // benar (logika)
+```
+
+`ke_logika` cuma menganggap string `"benar"` persis sebagai `benar` — string lain (termasuk `"salah"`) jadi `salah`, beda dari kebiasaan JavaScript yang menganggap string apa pun yang tidak kosong sebagai truthy.
+
+---
+
+### ⚡ Automatic Concurrency (`fungsi paralel`)
+
+Biasanya, kalau mau kode jalan paralel di banyak inti CPU, developer harus bikin thread/worker manual. Di Gatra, cukup tambahkan kata `paralel` di depan `fungsi`:
+
+```gatra
+fungsi paralel jumlahkan(n: angka): angka {
+    isi ubah total = 0
+    isi ubah i = 0
+    selama i < n {
+        total = total + i
+        i = i + 1
+    }
+    balik total
+}
+
+fungsi asinkron utama(): tiada {
+    isi hasil = tunggu jumlahkan(20000000)
+    cetak(hasil)
+}
+utama()
+```
+
+Gatra yang mengurus sisanya lewat sebuah **scheduler runtime**:
+
+- Panggilan pertama (cold start) jalan langsung di Event Loop — jalur paling murah.
+- Kalau fungsi itu terbukti berat (rata-rata durasinya lewat ambang tertentu), panggilan berikutnya otomatis dialihkan ke **worker pool** (dibatasi sejumlah core CPU, maksimal 8) — tanpa developer menulis kode thread sama sekali.
+- Kalau worker pool dan antreannya penuh, tugas tetap dijalankan inline — jadi beban di scheduler tidak pernah membuat program berhenti, cuma kehilangan sedikit optimasi.
+
+**Concurrency Safety** — supaya "otomatis" ini tetap aman, compiler melakukan beberapa pemeriksaan saat kompilasi:
+
+- **Ownership/move-checking** — variabel yang dikirim ke `fungsi paralel` dianggap "dipindah" (moved); memakainya lagi sesudahnya adalah galat kompilasi.
+- **Closure capture check** — `fungsi paralel` tidak boleh membaca variabel dari luar fungsinya (worker menjalankan ulang file dari awal dan tidak akan pernah sampai ke deklarasi variabel itu).
+- **Worker transfer validation** — struktur yang dikirim ke `fungsi paralel` harus data murni (tidak boleh punya method), karena method/class tidak selamat melewati batas worker.
+- **`tanpa_periksa(...)`** — escape hatch eksplisit kalau developer yakin suatu penggunaan aman, tapi tetap harus terlihat jelas di kode (tidak ada "unsafe" yang tersembunyi).
+
+Detail lengkap fase dan rencana lanjutannya ada di `Automatic_Concurrency.md`.
+
+---
+
+### 🛠️ Tooling Bawaan
+
+Gatra bukan cuma compiler — ada beberapa alat bantu langsung dari CLI:
+
+- **Linter** (`gatra periksa`) — analisis statis untuk menangkap pola bermasalah sebelum dijalankan.
+- **Formatter** (`gatra rapikan`) — merapikan gaya penulisan kode secara otomatis.
+- **Dependency graph** (`gatra graf`) — memetakan hubungan `impor` antar file `.gatra`, termasuk mendeteksi circular import, dengan output teks (default), JSON, atau Mermaid.
+- **Explain** (`gatra jelaskan`) — mengklasifikasikan tiap fungsi sebagai CPU-bound/I/O-bound dan menyarankan strategi paralelisasi yang cocok.
+- **Doctor** (`gatra dokter`) — memeriksa kesehatan environment (versi Node, npm, dll) sebelum mulai kerja.
+- **Dev mode** (`gatra kembangkan`) — mode watch, otomatis compile ulang saat file berubah.
+
+---
+
+### 📦 Dependensi & Konfigurasi Proyek
+
+Gatra tidak membangun package manager sendiri dari nol — dependensi tetap dikelola lewat `npm` seperti biasa. Yang dimiliki Gatra sendiri adalah `gatra.toml`, file konfigurasi ringan per-proyek (nama, versi, arsitektur, entry point, output build) yang dibaca oleh perintah seperti `gatra info`, `gatra bangun-proyek`, dan `gatra bersihkan`.
+
+---
+
 # ⚙️ Cara Kerja Gatra
 
 Gatra **bukan** bahasa yang punya interpreter atau VM sendiri. Gatra adalah **compiler yang menerjemahkan kode `.gatra` menjadi JavaScript biasa**, lalu JavaScript itu yang dijalankan oleh Node.js (V8).
@@ -173,6 +248,27 @@ Node.js (V8)
 ```
 
 Karena keluarannya JavaScript murni, semua yang bisa dilakukan JavaScript/Node.js bisa dilakukan dari Gatra — termasuk `impor` package dari npm atau modul bawaan Node (`node:http`, `node:fs`, dst), bukan cuma untuk file `.gatra` lokal.
+
+### Struktur compiler (`src/`)
+
+Tiap tahap di pipeline di atas punya folder sendiri, dan di sekitarnya ada beberapa modul pendukung yang dipakai lintas tahap:
+
+```text
+src/
+├── lexer/        pemecah token — juga tempat kamus keyword Bahasa Indonesia (keywords.js)
+├── parser/       penyusun AST dari token, plus pesan galat sintaks yang ramah (errors.js)
+├── ast/          definisi bentuk/tipe node AST (dipakai bareng oleh semua tahap lain)
+├── typechecker/  validasi tipe, visibility, dan Concurrency Safety (symbol-table.js, type-errors.js)
+├── codegen/      AST → kode JavaScript, plus obfuscator.js untuk mode `--samar`
+├── runtime/      scheduler.js — bounded worker pool untuk 'fungsi paralel' (Automatic Concurrency)
+├── module/       resolusi 'impor' lokal & aturan visibility gaya Go (resolver.js, visibility.js)
+├── package/      pendaftaran & pesan galat seputar package/modul (package-registry.js)
+├── linter/       analisis statis untuk 'gatra periksa'
+├── formatter/    perapi gaya kode untuk 'gatra rapikan'
+└── cli/          entry point 'gatra' + semua perintahnya (gatra.js, config.js, graph.js, explain.js)
+```
+
+Semua tahap ini murni fungsi/kelas biasa yang dipanggil berurutan — tidak ada state tersembunyi atau proses terpisah, kecuali dua jalur eksekusi khusus di bawah.
 
 ### Jalur eksekusi
 
@@ -202,7 +298,7 @@ Fungsi:
 
 ```gatra
 fungsi tambah(a: angka, b: angka): angka {
-    kembali a + b
+    balik a + b
 }
 
 isi hasil = tambah(10, 20)
@@ -346,17 +442,39 @@ gatra jalankan utama.gatra
 
 ### Perintah CLI lainnya
 
+Daftar lengkap juga selalu bisa dilihat langsung lewat `gatra bantuan`.
+
 ```bash
+# Proyek
+gatra buat [nama] [--arch <arsitektur>]      # Inisialisasi proyek baru
+                                              #   --arch: sederhana | modular | clean | hexagonal | microservice
+gatra info                                   # Info proyek (baca gatra.toml)
+
+# Pengembangan
+gatra kembangkan [file]                      # Mode dev (watch + restart otomatis)
 gatra jalankan <file>                        # Kompilasi dan jalankan file .gatra
+gatra uji [file]                             # Jalankan blok 'uji' (proyek jika tanpa argumen)
+gatra periksa <file>                         # Analisis statis (linter)
+gatra rapikan <file> [--tulis]               # Format kode (stdout, atau --tulis untuk menimpa file)
+
+# Build
 gatra bangun <file> [output] [--samar]       # Kompilasi satu file ke .js
 gatra bundel <entry> [output] [--samar]      # Bundle semua dependensi ke satu file .js
 gatra bangun-proyek <dir> [dist] [--samar]   # Kompilasi seluruh proyek
-gatra uji <file>                             # Jalankan blok 'uji' dalam file
-gatra periksa <file>                         # Analisis statis (linter)
-gatra rapikan <file> [--tulis]               # Format kode (stdout, atau --tulis untuk menimpa file)
+gatra bersihkan [dir]                        # Hapus artefak build (dist/, .gatra/, .cache/)
+
+# Analisis
+gatra graf [file] [--format json|mermaid]    # Dependency graph
+gatra jelaskan <file> [fungsi]               # Klasifikasi CPU-bound/I-O-bound & strategi paralelisasi
+gatra ukur <file>                            # Benchmark waktu kompilasi & eksekusi
+gatra dokter                                 # Diagnostik environment (Node, npm, dll)
+
+# Sistem
 gatra versi                                  # Tampilkan versi compiler
 gatra bantuan                                # Tampilkan bantuan
 ```
+
+`--samar` menghasilkan kode yang disamarkan (identifier dienkripsi, string diubah ke unicode) — berguna kalau mau distribusikan hasil build tanpa source `.gatra`-nya.
 
 Gatra tidak punya package manager sendiri — pakai `npm install`/`npm update`/`npm uninstall` langsung untuk dependensi.
 
