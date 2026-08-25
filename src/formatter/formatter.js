@@ -115,10 +115,11 @@ class Formatter {
   }
 
   fnDecl(node) {
-    const async_   = node.isAsync ? 'asinkron ' : '';
-    const receiver = node.receiver ? `(${node.receiver.name} ${node.receiver.type}) ` : '';
-    const ret      = node.returnType ? `: ${typeToSource(node.returnType)}` : '';
-    return `fungsi ${async_}${receiver}${node.name}(${this.params(node.params)})${ret} ${this.block(node.body)}`;
+    const async_    = node.isAsync ? 'asinkron ' : '';
+    const parallel_ = node.isParallel ? 'paralel ' : '';
+    const receiver  = node.receiver ? `(${node.receiver.name} ${node.receiver.type}) ` : '';
+    const ret       = node.returnType ? `: ${typeToSource(node.returnType)}` : '';
+    return `fungsi ${async_}${parallel_}${receiver}${node.name}(${this.params(node.params)})${ret} ${this.block(node.body)}`;
   }
 
   structDecl(node) {

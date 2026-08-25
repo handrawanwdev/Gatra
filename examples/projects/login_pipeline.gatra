@@ -1,0 +1,186 @@
+// login_pipeline.gatra — usecase login NestJS-style buat nguji arsitektur
+// Automatic Concurrency (Automatic_Concurrency.md, lihat juga
+// examples/belajar/27_paralel_dan_konkurensi.gatra):
+//
+//   Login Request
+//        │
+//        ▼
+//   Validate input          → CPU ringan   (validasiInput, sinkron biasa)
+//        │
+//        ▼
+//   Query database          → I/O          (cariPenggunaDiDb, 'fungsi asinkron')
+//        │
+//        ▼
+//   Verify password hash    → CPU berat    (verifikasiKataSandi, 'fungsi paralel')
+//        │
+//        ▼
+//   Create session/JWT      → CPU ringan   (buatSesi, sinkron biasa)
+//        │
+//        ▼
+//   Response
+//
+// Programmer tidak bikin thread/worker manual di tahap manapun — cuma tahap
+// CPU berat (verifikasi hash scrypt) yang ditandai 'fungsi paralel'; runtime
+// scheduler (src/runtime/scheduler.js) yang mutusin Event Loop vs Worker Pool
+// PER PANGGILAN berdasarkan histori durasi eksekusi fungsi itu sendiri.
+// Tahap I/O (query DB) cukup 'fungsi asinkron' + 'tunggu' biasa — tidak lewat
+// worker pool sama sekali, karena I/O-bound bukan CPU-bound.
+//
+// Perlu: npm install @nestjs/common reflect-metadata (dekorator di bawah
+// cuma buat menunjukkan bentuk kodenya, sama seperti examples/nestjs_pengguna.gatra
+// — 'gatra jalankan' tidak melewati bootstrap Nest yang sesungguhnya).
+
+impor krypto dari "node:crypto"
+impor tempo dari "node:timers/promises"
+impor { Controller, Post, Body, Injectable } dari "@nestjs/common"
+
+struktur LoginDto {
+  email: teks
+  kataSandi: teks
+}
+
+struktur Pengguna {
+  id: teks
+  email: teks
+  garam: teks
+  hashKataSandi: teks
+}
+
+struktur SesiToken {
+  token: teks
+  kedaluwarsa: angka
+}
+
+// ── Tahap 1: Validate input — CPU ringan, sinkron ───────────────────────────
+fungsi validasiInput(dto: LoginDto): hasil<LoginDto, teks> {
+  jika !(dto.email.includes("@")) {
+    balik gagal("format email tidak valid")
+  }
+  jika dto.kataSandi.length < 8 {
+    balik gagal("kata sandi minimal 8 karakter")
+  }
+  balik berhasil(dto)
+}
+
+// "Database" contoh — password asli "RahasiaAman123" sudah di-hash pakai
+// scrypt sekali di sini (bukan bagian pipeline, cuma seed data demo).
+isi GARAM_DEMO = "s0m3s@ltyangpanjang"
+isi HASH_DEMO  = krypto.scryptSync("RahasiaAman123", GARAM_DEMO, 64).toString("hex")
+
+// ── Tahap 2: Query database — I/O, 'fungsi asinkron' biasa ─────────────────
+fungsi asinkron cariPenggunaDiDb(email: teks): hasil<Pengguna, teks> {
+  tunggu tempo.setTimeout(30) // simulasi latensi query DB, bukan kerja CPU
+  jika email == "budi@contoh.id" {
+    balik berhasil(Pengguna { id: "1", email: email, garam: GARAM_DEMO, hashKataSandi: HASH_DEMO })
+  }
+  balik gagal("pengguna tidak ditemukan")
+}
+
+// ── Tahap 3: Verify password hash — CPU berat, lewat scheduler 'paralel' ───
+// scrypt sengaja dipilih (bukan HMAC ringan) karena ini satu-satunya tahap
+// yang benar-benar CPU-bound di pipeline ini — kandidat wajar buat lompat ke
+// Worker Pool begitu histori durasinya kebukti > THRESHOLD_MS (scheduler.js).
+//
+// 'fungsi paralel' TIDAK BOLEH menangkap variabel luar (mis. GARAM_DEMO/
+// HASH_DEMO di atas) — worker menjalankan ulang file ini dari awal dan tidak
+// pernah sampai ke baris yang mendeklarasikan variabel top-level itu. Karena
+// itu garam & hash dikirim eksplisit sebagai parameter dari pemanggilnya.
+fungsi paralel verifikasiKataSandi(kataSandi: teks, garam: teks, hashTersimpan: teks): logika {
+  isi hash = krypto.scryptSync(kataSandi, garam, 64).toString("hex")
+  balik hash == hashTersimpan
+}
+
+// ── Tahap 4: Create session/JWT — CPU ringan, sinkron ───────────────────────
+fungsi buatSesi(pengguna: Pengguna): SesiToken {
+  isi tandaTangan = krypto.createHmac("sha256", "rahasia-server-demo")
+    .update(pengguna.id + "." + pengguna.email)
+    .digest("hex")
+  balik SesiToken { token: pengguna.id + "." + tandaTangan, kedaluwarsa: 3600 }
+}
+
+@Injectable()
+struktur AuthService {}
+
+// ── Tahap 5: Response — rangkai 4 tahap di atas jadi satu hasil<T,E> ────────
+// Tiap tahap berhenti di tempat kalau gagal (early return lewat 'cocok'),
+// jadi tahap CPU berat & tahap I/O TIDAK PERNAH jalan kalau validasi input
+// saja sudah gagal.
+fungsi asinkron (s AuthService) login(dto: LoginDto): hasil<SesiToken, teks> {
+  // 'cocok' cuma boleh satu statement per lengan — jadi tiap tahap simpan
+  // hasilnya ke variabel 'ubah' di luar, lalu lanjut linear (bukan nested).
+  isi hasilValidasi = validasiInput(dto)
+  isi ubah dtoValid: LoginDto = dto
+  cocok hasilValidasi {
+    gagal(pesan)      => balik gagal(pesan)
+    berhasil(divalidasi) => dtoValid = divalidasi
+  }
+
+  isi hasilDb = tunggu cariPenggunaDiDb(dtoValid.email)
+  isi ubah pengguna: Pengguna = Pengguna { id: "", email: "", garam: "", hashKataSandi: "" }
+  cocok hasilDb {
+    gagal(pesan)     => balik gagal(pesan)
+    berhasil(ditemukan) => pengguna = ditemukan
+  }
+
+  isi cocokKataSandi = tunggu verifikasiKataSandi(dtoValid.kataSandi, pengguna.garam, pengguna.hashKataSandi)
+  jika !cocokKataSandi {
+    balik gagal("email atau kata sandi salah")
+  }
+
+  balik berhasil(buatSesi(pengguna))
+}
+
+@Controller("auth")
+struktur AuthController {
+  service: AuthService
+}
+
+@Post("login")
+fungsi asinkron (c AuthController) login(@Body() dto: LoginDto): hasil<SesiToken, teks> {
+  balik tunggu c.service.login(dto)
+}
+
+fungsi asinkron utama(): tiada {
+  isi service    = AuthService {}
+  isi controller = AuthController { service: service }
+
+  // Percobaan 1: kredensial benar — lewat semua 5 tahap.
+  ukur "login sukses end-to-end" {
+    isi hasil1 = tunggu controller.login(LoginDto { email: "budi@contoh.id", kataSandi: "RahasiaAman123" })
+    cocok hasil1 {
+      berhasil(sesi) => cetak(f"login sukses, token: {sesi.token}")
+      gagal(pesan)   => cetak(f"login gagal: {pesan}")
+    }
+  }
+
+  // Percobaan 2: password salah — tetap sampai tahap verifikasi hash.
+  isi hasil2 = tunggu controller.login(LoginDto { email: "budi@contoh.id", kataSandi: "PasswordSalah123" })
+  cocok hasil2 {
+    berhasil(sesi) => cetak(f"login sukses, token: {sesi.token}")
+    gagal(pesan)   => cetak(f"login gagal: {pesan}")
+  }
+
+  // Percobaan 3: input tidak valid — berhenti di tahap 1, DB & hash tidak pernah kesentuh.
+  isi hasil3 = tunggu controller.login(LoginDto { email: "bukan-email", kataSandi: "123" })
+  cocok hasil3 {
+    berhasil(sesi) => cetak(f"login sukses, token: {sesi.token}")
+    gagal(pesan)   => cetak(f"login gagal: {pesan}")
+  }
+
+  // Percobaan 4-6: panggilan berulang biar scheduler 'membuktikan'
+  // verifikasiKataSandi mahal dan panggilan berikutnya otomatis lompat ke
+  // Worker Pool (bandingkan waktu percobaan pertama vs yang belakangan).
+  isi i = 0
+  selama i < 3 {
+    ukur "login percobaan berulang" {
+      isi hasil = tunggu controller.login(LoginDto { email: "budi@contoh.id", kataSandi: "RahasiaAman123" })
+      cocok hasil {
+        berhasil(sesi) => cetak(f"login sukses (percobaan {i}), token: {sesi.token}")
+        gagal(pesan)   => cetak(f"login gagal (percobaan {i}): {pesan}")
+      }
+    }
+    i = i + 1
+  }
+}
+
+   utama()

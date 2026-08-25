@@ -32,6 +32,20 @@ function getModuleExports(absPath) {
   const ast = parse(tokenize(src));
   const map = new Map();
 
+  // Receiver methods ('fungsi (r Tipe) nama() {...}') aren't their own
+  // top-level export — they ride along with the struct they're attached to,
+  // grouped here by receiver.type so a struct entry can carry its methods
+  // across the module boundary (see typechecker.js's defineImportedName()
+  // and codegen.js's import-time structMethods lookup).
+  const methodsByStruct = new Map();
+  for (const stmt of ast.body) {
+    if (stmt.type === N.FN_DECL && stmt.receiver) {
+      const list = methodsByStruct.get(stmt.receiver.type) || [];
+      list.push({ name: stmt.name, params: stmt.params, returnType: stmt.returnType || 'void' });
+      methodsByStruct.set(stmt.receiver.type, list);
+    }
+  }
+
   for (const stmt of ast.body) {
     let name = null, kind = null;
     switch (stmt.type) {
@@ -41,7 +55,9 @@ function getModuleExports(absPath) {
       case N.VAR_DECL:         name = stmt.name; kind = 'var';    break;
       default: continue;
     }
-    map.set(name, { kind, public: isPublicName(name), decl: stmt });
+    const entry = { kind, public: isPublicName(name), decl: stmt };
+    if (kind === 'struct') entry.methods = methodsByStruct.get(name) || [];
+    map.set(name, entry);
   }
 
   exportsCache.set(absPath, map);

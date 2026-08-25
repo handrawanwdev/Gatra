@@ -3,6 +3,7 @@
 const path = require('path');
 const { NodeType: N } = require('../ast/nodes');
 const { isPublicName } = require('../module/visibility');
+const { resolveLocalPath, getModuleExports } = require('../module/resolver');
 
 // fungsi paralel — runtime scheduler for Automatic_Concurrency.md's Phase 0
 // (bounded worker pool + adaptive cost-based dispatch). Same "real, testable
@@ -82,6 +83,7 @@ const DESIGN_TYPE_PRIMS = {
 class CodeGenerator {
   constructor(opts = {}) {
     this.depth        = 0;
+    this.filePath      = opts.filePath || null;
     this.isPackage     = false; // true when a PackageDeclaration is present
     // Forces export emission even without 'paket' — set by callers compiling
     // a file specifically because another file imports from it (runEsm's
@@ -176,26 +178,53 @@ class CodeGenerator {
       if (stmt.type === N.FN_DECL && stmt.isParallel) {
         this.parallelFns.add(stmt.name);
       }
+      // A named import of a struct that has receiver methods in its OWN
+      // module needs those methods known here too — genStructInit() below
+      // decides 'new Name(...)' vs a bare object literal purely from
+      // this.structMethods, and an imported struct's methods live in a
+      // different file's own FN_DECL-with-receiver scan, never this one's.
+      if (stmt.type === N.PACKAGE_IMPORT && stmt.names && this.filePath && stmt.source.startsWith('.')) {
+        const localPath = resolveLocalPath(this.filePath, stmt.source);
+        if (localPath) {
+          let exportsMap = null;
+          try { exportsMap = getModuleExports(localPath); } catch (e) { /* best-effort */ }
+          if (exportsMap) {
+            for (const name of stmt.names) {
+              const entry = exportsMap.get(name);
+              if (entry && entry.kind === 'struct' && entry.methods && entry.methods.length > 0) {
+                this.structMethods.set(name, entry.methods);
+              }
+            }
+          }
+        }
+      }
     }
 
     const lines = [];
 
-    // Must come first: in a worker (see genParallelGuard()'s comment), this
-    // is a top-level 'return' that skips every other line below it — any
-    // prelude emitted before this one would still run pointlessly in a
-    // worker, so nothing else jumps ahead of it.
-    if (this.parallelFns.size > 0) lines.push(this.genParallelGuard());
-
-    if (usesTimeout(node)) lines.push(BATAS_PRELUDE);
-    if (usesHasil(node)) lines.push(HASIL_PRELUDE);
-    if (usesDecorators(node)) lines.push(DECORATE_PRELUDE);
-
-    // Emit all imports first (before functions/vars)
+    // Imports must come before the parallel guard below: a 'fungsi paralel'
+    // body is free to reference an imported package (Concurrency Safety only
+    // restricts capturing an outer 'isi' binding — see inferIdentifier() in
+    // typechecker.js), so the worker replaying this same file needs that
+    // 'const x = require(...)' already initialized before its guard returns.
+    // A require() isn't hoisted the way a top-level 'function' declaration
+    // is, so this one has to run for real, in order, ahead of the return.
     for (const stmt of node.body) {
       if (stmt.type === N.PACKAGE_IMPORT) {
         lines.push(this.genPackageImport(stmt));
       }
     }
+
+    // In a worker (see genParallelGuard()'s comment), this is a top-level
+    // 'return' that skips every other line below it — any prelude emitted
+    // after this one would still run pointlessly in a worker (the program's
+    // own top-level side effects, ultimately), so nothing but the imports
+    // above gets to jump ahead of it.
+    if (this.parallelFns.size > 0) lines.push(this.genParallelGuard());
+
+    if (usesTimeout(node)) lines.push(BATAS_PRELUDE);
+    if (usesHasil(node)) lines.push(HASIL_PRELUDE);
+    if (usesDecorators(node)) lines.push(DECORATE_PRELUDE);
 
     const testDecls = node.body.filter(s => s.type === N.TEST_DECL);
     if (this.includeTests && testDecls.length > 0) {
@@ -260,9 +289,48 @@ if (!__gatra_isMainThread__ && __gatra_parentPort__) {
 const __gatra_scheduler__ = require(${JSON.stringify(SCHEDULER_RUNTIME_PATH)});`;
   }
 
+  // A pure-data struct (no methods, no decorator) never gets a runtime
+  // binding on the exporting side (genTopStmt's STRUCT_DECL case) — its
+  // literal compiles straight to a plain object, never referencing the
+  // struct's name (see genStructInit). Importing such a name would either
+  // be a SyntaxError (ESM: "does not provide an export named ...") or a
+  // silent 'undefined' (CJS destructuring), so it's dropped here instead;
+  // its TYPE usage elsewhere (a bare 'Nama'/'Nama[]' annotation) still
+  // typechecks fine without any import (see inferIdentifier/consumeType —
+  // type names aren't resolved against the symbol table).
+  filterRuntimeImportNames(node) {
+    if (!node.names || !this.filePath || !node.source.startsWith('.')) return node.names;
+    const localPath = resolveLocalPath(this.filePath, node.source);
+    if (!localPath) return node.names;
+    let exportsMap = null;
+    try { exportsMap = getModuleExports(localPath); } catch (e) { return node.names; }
+    return node.names.filter(name => {
+      const entry = exportsMap.get(name);
+      if (!entry || entry.kind !== 'struct') return true;
+      const hasMethods   = entry.methods && entry.methods.length > 0;
+      const hasDecorator = !!(entry.decl.decorators && entry.decl.decorators.length > 0);
+      return hasMethods || hasDecorator;
+    });
+  }
+
   genPackageImport(node) {
+    // A file with any 'fungsi paralel' decl must stay plain CommonJS end to
+    // end: the worker guard (genParallelGuard()) needs a top-level 'return',
+    // which is a SyntaxError in an ES module — and Node treats any 'import'
+    // in the file as proof it's one (auto-reparsed as ESM even from a .js
+    // extension). require() carries the exact same runtime semantics here
+    // (same require() the worker guard itself already uses) with none of
+    // that module-system baggage.
+    if (this.parallelFns.size > 0) {
+      if (node.names) {
+        const names = this.filterRuntimeImportNames(node);
+        return names.length ? `const { ${names.join(', ')} } = require(${JSON.stringify(node.source)});` : '';
+      }
+      return `const ${node.localName} = require(${JSON.stringify(node.source)});`;
+    }
     if (node.names) {
-      return `import { ${node.names.join(', ')} } from ${JSON.stringify(node.source)};`;
+      const names = this.filterRuntimeImportNames(node);
+      return names.length ? `import { ${names.join(', ')} } from ${JSON.stringify(node.source)};` : '';
     }
     return `import * as ${node.localName} from ${JSON.stringify(node.source)};`;
   }
@@ -274,12 +342,21 @@ const __gatra_scheduler__ = require(${JSON.stringify(SCHEDULER_RUNTIME_PATH)});`
     // starts with an uppercase letter. No export/ekspor keyword needed.
     const exported = (this.isPackage || this.emitExports) && node.name && isPublicName(node.name);
     switch (node.type) {
-      case N.STRUCT_DECL:
+      case N.STRUCT_DECL: {
         // A class-decorated struct compiles to 'let X = class {...}; ...;
         // X = __decorate(...);' — 'export' prefixes just the first line
         // fine, since ESM export bindings are live: the later reassignment
         // is still visible to importers.
-        return ind + (exported ? 'export ' : '') + this.generate(node);
+        //
+        // A pure-data struct (no methods, no decorator) compiles to a doc
+        // comment only (see genStructDecl) — zero runtime representation —
+        // so there is nothing to export even when its name is public;
+        // genPackageImport() mirrors this and never imports such a name.
+        const hasMethods    = (this.structMethods.get(node.name) || []).length > 0;
+        const hasDecorator  = !!(node.decorators && node.decorators.length > 0);
+        const structExported = exported && (hasMethods || hasDecorator);
+        return ind + (structExported ? 'export ' : '') + this.generate(node);
+      }
       case N.FN_DECL:
         return ind + (exported ? 'export ' : '') + this.generate(node);
       case N.VAR_DECL:

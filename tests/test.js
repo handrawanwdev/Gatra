@@ -2822,6 +2822,145 @@ run("executes: 'tanpa_periksa(...)' compiles to a transparent no-op — program 
   });
 });
 
+// ── CLI: gatra.toml config ──────────────────────────────────────────────────
+
+const { parseToml, stringifyToml, loadConfig, findConfigFile } = require('../src/cli/config');
+
+run('config: parseToml reads sections, strings, numbers and booleans', () => {
+  const toml = parseToml(`
+# comment
+[project]
+name = "clinic-api"
+version = "1.0.0"
+
+[build]
+source = "src"
+output = "dist"
+
+[format]
+indent = 4
+strict = true
+`);
+  assertEqual(toml.project.name, 'clinic-api');
+  assertEqual(toml.project.version, '1.0.0');
+  assertEqual(toml.build.source, 'src');
+  assertEqual(toml.format.indent, 4);
+  assertEqual(toml.format.strict, true);
+});
+
+run('config: stringifyToml round-trips through parseToml', () => {
+  const original = { project: { name: 'x', version: '0.1.0' }, build: { source: 'src', output: 'dist' } };
+  const reparsed = parseToml(stringifyToml(original));
+  assertEqual(reparsed.project.name, 'x');
+  assertEqual(reparsed.build.output, 'dist');
+});
+
+run('config: findConfigFile walks up to the nearest ancestor gatra.toml', () => {
+  withTmpDir((dir) => {
+    fs.writeFileSync(path.join(dir, 'gatra.toml'), '[project]\nname = "x"\n');
+    const nested = path.join(dir, 'src', 'modul');
+    fs.mkdirSync(nested, { recursive: true });
+    assertEqual(findConfigFile(nested), path.join(dir, 'gatra.toml'));
+  });
+});
+
+run('config: loadConfig returns null when no gatra.toml exists up the tree', () => {
+  withTmpDir((dir) => {
+    assertEqual(loadConfig(dir), null);
+  });
+});
+
+// ── CLI: dependency graph ───────────────────────────────────────────────────
+
+const { buildGraph, findCycles, renderText: renderGraphText, renderMermaid: renderGraphMermaid } = require('../src/cli/graph');
+
+run('graph: buildGraph walks local .gatra imports into a node map', () => {
+  withTmpDir((dir) => {
+    fs.writeFileSync(path.join(dir, 'a.gatra'), 'impor b dari "./b.gatra"\n');
+    fs.writeFileSync(path.join(dir, 'b.gatra'), 'fungsi f() {}\n');
+    const nodes = buildGraph(path.join(dir, 'a.gatra'));
+    assertEqual(nodes.size, 2);
+    assertEqual(nodes.get(path.join(dir, 'a.gatra')).imports.length, 1);
+    assertEqual(nodes.get(path.join(dir, 'b.gatra')).imports.length, 0);
+  });
+});
+
+run('graph: buildGraph marks a missing local import instead of throwing', () => {
+  withTmpDir((dir) => {
+    fs.writeFileSync(path.join(dir, 'a.gatra'), 'impor b dari "./tidak_ada.gatra"\n');
+    const nodes = buildGraph(path.join(dir, 'a.gatra'));
+    assertEqual(nodes.get(path.join(dir, 'tidak_ada.gatra')).missing, true);
+  });
+});
+
+run('graph: findCycles detects a circular import', () => {
+  withTmpDir((dir) => {
+    fs.writeFileSync(path.join(dir, 'a.gatra'), 'impor b dari "./b.gatra"\n');
+    fs.writeFileSync(path.join(dir, 'b.gatra'), 'impor a dari "./a.gatra"\n');
+    const entry = path.join(dir, 'a.gatra');
+    const nodes = buildGraph(entry);
+    const cycles = findCycles(nodes, entry);
+    assert(cycles.length > 0, 'expected at least one cycle');
+  });
+});
+
+run('graph: renderText marks a cycle inline instead of recursing forever', () => {
+  withTmpDir((dir) => {
+    fs.writeFileSync(path.join(dir, 'a.gatra'), 'impor b dari "./b.gatra"\n');
+    fs.writeFileSync(path.join(dir, 'b.gatra'), 'impor a dari "./a.gatra"\n');
+    const entry = path.join(dir, 'a.gatra');
+    const nodes = buildGraph(entry);
+    const text = renderGraphText(nodes, entry, dir);
+    assert(text.includes('(circular)'), 'expected "(circular)" marker in output');
+  });
+});
+
+run('graph: renderMermaid emits one edge per import', () => {
+  withTmpDir((dir) => {
+    fs.writeFileSync(path.join(dir, 'a.gatra'), 'impor b dari "./b.gatra"\n');
+    fs.writeFileSync(path.join(dir, 'b.gatra'), 'fungsi f() {}\n');
+    const entry = path.join(dir, 'a.gatra');
+    const nodes = buildGraph(entry);
+    const mermaid = renderGraphMermaid(nodes, dir);
+    assert(mermaid.startsWith('graph TD'), 'expected mermaid header');
+    assert(mermaid.includes('-->'), 'expected an edge');
+  });
+});
+
+// ── CLI: explain (function classification) ──────────────────────────────────
+
+const { analyzeFile } = require('../src/cli/explain');
+
+run('explain: a plain sync function is classified CPU-bound and parallelizable', () => {
+  const [fn] = analyzeFile('fungsi hitung(x: angka): angka { balik x * 2 }');
+  assertEqual(fn.name, 'hitung');
+  assertEqual(fn.cpuBound, true);
+  assertEqual(fn.ioBound, false);
+  assertEqual(fn.isAsync, false);
+  assertEqual(fn.parallelizable, true);
+});
+
+run('explain: an async function that awaits is classified I/O-bound, not parallelizable', () => {
+  const [fn] = analyzeFile(`
+    impor db dari "./database.gatra"
+    fungsi asinkron login(): tiada {
+      tunggu db.cari()
+    }
+  `);
+  assertEqual(fn.ioBound, true);
+  assertEqual(fn.cpuBound, false);
+  assertEqual(fn.parallelizable, false);
+  assertEqual(fn.strategy, 'Async I/O');
+  assertEqual(fn.dependencies.includes('db'), true);
+});
+
+run("explain: a 'fungsi paralel' is classified parallelizable with the Worker Pool strategy", () => {
+  const [fn] = analyzeFile('fungsi paralel proses(x: angka): angka { balik x * 2 }');
+  assertEqual(fn.isParallel, true);
+  assertEqual(fn.parallelizable, true);
+  assertEqual(fn.strategy, 'Worker Pool (paralel)');
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);

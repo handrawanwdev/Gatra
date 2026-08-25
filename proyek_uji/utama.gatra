@@ -1,0 +1,5 @@
+fungsi utama() {
+  cetak("Halo, proyek_uji!")
+}
+
+utama()

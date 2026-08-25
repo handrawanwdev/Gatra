@@ -1,0 +1,8 @@
+{
+  "name": "proyek_uji",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "gatra jalankan utama.gatra"
+  }
+}

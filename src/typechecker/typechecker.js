@@ -392,6 +392,18 @@ class TypeChecker {
           kind: 'struct', name, fields: d.fields,
           line: node.line, col: node.col,
         });
+        // Receiver methods declared on this struct in its own module ride
+        // along with the import (see getModuleExports() in resolver.js) —
+        // without this, a method call on an imported struct instance would
+        // wrongly fail as "no such field" (this.methods is otherwise only
+        // ever populated by scanning the CURRENT file's own 'fungsi (r T)
+        // ...' declarations).
+        if (entry.methods && entry.methods.length > 0) {
+          const table = this.methods[name] || (this.methods[name] = new Map());
+          for (const m of entry.methods) {
+            table.set(m.name, { params: m.params, returnType: m.returnType });
+          }
+        }
         return;
       case 'type':
         this.typeAliases[name] = d.target;
