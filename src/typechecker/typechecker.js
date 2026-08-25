@@ -63,14 +63,17 @@ class TypeChecker {
     this.symbols.define('gagal', {
       kind: 'fn', name: 'gagal', params: [], returnType: 'unknown', variadic: true, builtin: true,
     });
-    // hitung()/jumlah(.f)/rata_rata(.f)/minimum(.f)/maksimum(.f) — aggregate
-    // markers valid only inside .agregat({...}); codegen turns each call into
-    // a plain descriptor, they're never invoked as real functions at runtime.
-    for (const name of ['hitung', 'jumlah', 'rata_rata', 'minimum', 'maksimum']) {
-      this.symbols.define(name, {
-        kind: 'fn', name, params: [], returnType: 'number', variadic: true, builtin: true,
-      });
-    }
+    // tanpa_periksa(expr) — Concurrency Safety's explicit 'unsafe' escape
+    // hatch (Automatic_Concurrency.md): a no-op identity wrapper at runtime
+    // (codegen unwraps it back to just 'expr'), but checkMoveSafety() below
+    // recognizes the call syntactically and skips move-tracking for
+    // whatever it wraps — the one way around usedAfterMove/
+    // unsafeClosureCapture when the programmer is certain a given use is
+    // actually safe. Always visible in the source, per the doc's own
+    // "concurrency yang berbahaya harus terlihat jelas oleh developer".
+    this.symbols.define('tanpa_periksa', {
+      kind: 'fn', name: 'tanpa_periksa', params: [], returnType: 'unknown', variadic: true, builtin: true,
+    });
   }
 
   // ── Public entry point ──────────────────────────────────────────────────────
@@ -85,6 +88,136 @@ class TypeChecker {
       );
     }
     for (const stmt of ast.body) this.checkStmt(stmt);
+
+    // Concurrency Safety post-passes — run after the main pass so struct
+    // method tables (this.methods) are fully populated regardless of
+    // declaration order, and every symbol/type in the program is already
+    // known-valid to build on.
+    this.checkParallelWorkerTransfer(ast);
+    this.checkMoveSafety(ast);
+  }
+
+  // Worker transfer validation: a 'fungsi paralel' param or return type that
+  // resolves to a struct with methods or a class-level decorator compiles to
+  // a real JS 'class' (see codegen.js's genStructDecl) — not safe to send
+  // across the worker_threads structured-clone boundary (methods/prototypes
+  // don't survive it), and its declaration would hit the same
+  // worker-never-reaches-it TDZ problem unsafeClosureCapture guards against
+  // for plain variables. Only plain-data structs (fields only, no methods,
+  // no decorator — which compile to nothing but a type comment) are allowed.
+  checkParallelWorkerTransfer(ast) {
+    const structDecls = new Map();
+    for (const s of ast.body) {
+      if (s.type === N.STRUCT_DECL) structDecls.set(s.name, s);
+    }
+
+    const isPlainDataType = (t) => {
+      if (!t) return true;
+      let base = t;
+      while (base.endsWith('[]')) base = base.slice(0, -2);
+      if (base.endsWith('?')) base = base.slice(0, -1);
+      const decl = structDecls.get(base);
+      if (!decl) return true; // primitive, map<K,V>, or unknown — not this check's concern
+      const hasDecorators = !!(decl.decorators && decl.decorators.length > 0);
+      const hasMethods = !!(this.methods[base] && this.methods[base].size > 0);
+      return !hasDecorators && !hasMethods;
+    };
+
+    for (const stmt of ast.body) {
+      if (stmt.type !== N.FN_DECL || !stmt.isParallel) continue;
+      for (const p of stmt.params) {
+        if (!isPlainDataType(p.type)) {
+          const what = this.grammar === 'id' ? `Parameter '${p.name}'` : `Parameter '${p.name}'`;
+          throw this.err.paralelNeedsPlainData(what, stmt.name, p.type, stmt.line, stmt.col);
+        }
+      }
+      if (stmt.returnType && !isPlainDataType(stmt.returnType)) {
+        const what = this.grammar === 'id' ? 'Tipe kembalian' : 'Return type';
+        throw this.err.paralelNeedsPlainData(what, stmt.name, stmt.returnType, stmt.line, stmt.col);
+      }
+    }
+  }
+
+  // Move checking + use-after-move: passing a variable straight into a
+  // 'fungsi paralel' call transfers it to the worker/scheduler — ownership
+  // rule from Automatic_Concurrency.md's original example:
+  //   isi data = buatData()
+  //   proses(data)
+  //   cetak(data)   // GALAT: 'data' sudah dipindah
+  // Scans each function body (and the top-level statement list) as one flat,
+  // program-order sequence — a name entering any nested block (jika/selama/
+  // dst.) still counts as moved for anything after that block, even on a
+  // branch that didn't run; conservative on purpose (a false "already
+  // moved" beats a missed real one), and 'tanpa_periksa(...)' is the
+  // explicit way out when the programmer is certain that's fine here.
+  // Deliberately NOT general aliasing/borrow/lifetime analysis — just this
+  // one concrete, checkable rule.
+  checkMoveSafety(ast) {
+    const parallelFns = new Set();
+    for (const s of ast.body) {
+      if (s.type === N.FN_DECL && s.isParallel) parallelFns.add(s.name);
+    }
+    if (parallelFns.size === 0) return;
+
+    // 'unsafe' is true for anything nested inside a tanpa_periksa(...)
+    // wrapper — suppresses the "already moved" read-check (that's the whole
+    // point of the escape hatch) while still tracking any *new* moves found
+    // within it normally, so e.g. tanpa_periksa(x) followed by a real
+    // (non-wrapped) proses(x) two lines later still moves x for real.
+    const scan = (node, moved, unsafe) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { for (const n of node) scan(n, moved, unsafe); return; }
+
+      // Function bodies always get their own independent scan (see the loop
+      // below) — never inherit whatever 'moved' set the caller is tracking.
+      if (node.type === N.FN_DECL) return;
+
+      if (node.type === N.CALL_EXPR && typeof node.callee === 'object' && node.callee.type === N.IDENTIFIER) {
+        if (node.callee.name === 'tanpa_periksa') {
+          for (const a of node.args) scan(a, moved, true);
+          return;
+        }
+        if (parallelFns.has(node.callee.name)) {
+          for (const arg of node.args) {
+            if (arg.type === N.IDENTIFIER) {
+              if (!unsafe && moved.has(arg.name)) throw this.err.usedAfterMove(arg.name, arg.line, arg.col);
+              moved.set(arg.name, { line: arg.line, col: arg.col });
+            } else {
+              scan(arg, moved, unsafe);
+            }
+          }
+          return;
+        }
+      }
+
+      if (node.type === N.IDENTIFIER) {
+        if (!unsafe && moved.has(node.name)) throw this.err.usedAfterMove(node.name, node.line, node.col);
+        return;
+      }
+
+      if (node.type === N.ASSIGN_EXPR) {
+        scan(node.value, moved, unsafe);
+        if (node.target.type === N.IDENTIFIER) moved.delete(node.target.name); // reassignment = fresh ownership
+        else scan(node.target, moved, unsafe);
+        return;
+      }
+
+      if (node.type === N.VAR_DECL) {
+        if (node.value) scan(node.value, moved, unsafe);
+        moved.delete(node.name); // fresh binding, even if it shadows an outer moved name
+        return;
+      }
+
+      for (const k of Object.keys(node)) {
+        if (k === 'type') continue;
+        scan(node[k], moved, unsafe);
+      }
+    };
+
+    scan(ast.body, new Map(), false); // top-level statements share one linear scope
+    for (const s of ast.body) {
+      if (s.type === N.FN_DECL && s.body) scan(s.body.body, new Map(), false);
+    }
   }
 
   // ── Statements ──────────────────────────────────────────────────────────────
@@ -317,6 +450,10 @@ class TypeChecker {
   checkFnDecl(node) {
     const returnType = node.returnType || 'void';
 
+    if (node.isParallel && node.receiver) {
+      throw this.err.paralelNeedsTopLevel(node.name, node.line, node.col);
+    }
+
     if (node.receiver) {
       // Go-style receiver method: fungsi (h Hewan) sapa() { ... } — attached
       // to struct 'Hewan', not a global name, so it lives in its own
@@ -378,7 +515,22 @@ class TypeChecker {
     });
 
     const prevFn    = this.currentFn;
-    this.currentFn  = { name: node.name, returnType, isAsync: node.isAsync || false };
+    // A 'paralel' function is always called through the scheduler, which
+    // always hands back a Promise (whether it actually ran on a worker or
+    // inline) — so 'tunggu' is legal in its body exactly like an async fn,
+    // without also requiring the 'asinkron' keyword.
+    this.currentFn  = {
+      name: node.name, returnType, isAsync: node.isAsync || node.isParallel || false,
+      isParallel: !!node.isParallel,
+      // Snapshot of the scope depth *before* pushing this fn's own param
+      // scope — inferIdentifier() uses it to tell "this name resolved
+      // inside my own body/params" from "this name resolved in an
+      // enclosing (module) scope", the latter being an unsafe closure
+      // capture for a 'paralel' fn (Automatic_Concurrency.md's Concurrency
+      // Safety doc — worker re-runs this file from scratch, so it never
+      // reaches whatever top-level statement created that outer binding).
+      paralelBoundaryDepth: this.symbols.depth(),
+    };
 
     this.symbols.push();
     for (const p of node.params) {
@@ -588,6 +740,21 @@ class TypeChecker {
 
     const info = this.symbols.lookup(node.name);
     if (!info) throw this.err.undefinedVar(node.name, node.line, node.col);
+
+    // Concurrency Safety — closure capture analysis: a 'paralel' fn's body
+    // may reference its own params/locals and other top-level fn/struct
+    // names (all re-declared identically when a worker re-runs this file —
+    // see scheduler.js), but never a variable from an *enclosing* scope. A
+    // worker skips straight past whatever top-level statement created that
+    // outer binding (isMainThread guard + early return), so it would be a
+    // ReferenceError there — caught here at compile time instead.
+    if (this.currentFn && this.currentFn.isParallel && info.kind === 'var') {
+      const depth = this.symbols.lookupDepth(node.name);
+      if (depth >= 0 && depth < this.currentFn.paralelBoundaryDepth) {
+        throw this.err.unsafeClosureCapture(node.name, this.currentFn.name, node.line, node.col);
+      }
+    }
+
     if (info.kind === 'var')     return info.type;
     if (info.kind === 'fn')      return 'fn';
     if (info.kind === 'package') return 'unknown'; // namespace — member types unresolved

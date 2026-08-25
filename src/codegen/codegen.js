@@ -4,6 +4,12 @@ const path = require('path');
 const { NodeType: N } = require('../ast/nodes');
 const { isPublicName } = require('../module/visibility');
 
+// fungsi paralel — runtime scheduler for Automatic_Concurrency.md's Phase 0
+// (bounded worker pool + adaptive cost-based dispatch). Same "real, testable
+// file, not an inlined prelude string" reasoning as the runtime module used
+// to have for the (since-removed) data<T> primitive.
+const SCHEDULER_RUNTIME_PATH = path.resolve(__dirname, '../runtime/scheduler.js');
+
 // tunggu expr batas N detik — Promise.race antara expr dan timer yang me-reject.
 const BATAS_PRELUDE = `function __gatra_batas(ms) {
   return new Promise((_, tolak) => setTimeout(() => tolak(new Error('Timeout')), ms));
@@ -91,6 +97,7 @@ class CodeGenerator {
     this.includeTests  = !!opts.includeTests; // 'gatra uji' compiles with tests active
     this.structMethods = new Map(); // struct name → [receiver FnDecl, ...], collected up front by genProgram
     this.structDecls   = new Map(); // struct name → its StructDecl node, collected up front by genProgram
+    this.parallelFns   = new Set(); // names of top-level 'fungsi paralel' declarations, collected up front by genProgram
   }
 
   ind() { return '  '.repeat(this.depth); }
@@ -166,9 +173,18 @@ class CodeGenerator {
       if (stmt.type === N.STRUCT_DECL) {
         this.structDecls.set(stmt.name, stmt);
       }
+      if (stmt.type === N.FN_DECL && stmt.isParallel) {
+        this.parallelFns.add(stmt.name);
+      }
     }
 
     const lines = [];
+
+    // Must come first: in a worker (see genParallelGuard()'s comment), this
+    // is a top-level 'return' that skips every other line below it — any
+    // prelude emitted before this one would still run pointlessly in a
+    // worker, so nothing else jumps ahead of it.
+    if (this.parallelFns.size > 0) lines.push(this.genParallelGuard());
 
     if (usesTimeout(node)) lines.push(BATAS_PRELUDE);
     if (usesHasil(node)) lines.push(HASIL_PRELUDE);
@@ -215,6 +231,33 @@ class CodeGenerator {
     }
 
     return lines.join('\n');
+  }
+
+  // Every 'fungsi paralel' declaration stays a plain top-level 'function'
+  // (fully hoisted in JS — unlike 'let'/'class' — so it's callable from this
+  // handler even though the worker branch returns before "reaching" its
+  // textual line). On the main thread this whole block is a no-op (the
+  // condition is false); in a worker (see scheduler.js's big comment for why
+  // a worker even runs this same file at all) it sets up the one thing a
+  // worker actually does — answer { fn, args } messages — then returns
+  // before any of the program's own top-level side effects run.
+  genParallelGuard() {
+    const names = [...this.parallelFns];
+    const fnsObj = names.join(', ');
+    return `const { isMainThread: __gatra_isMainThread__, parentPort: __gatra_parentPort__ } = require('worker_threads');
+if (!__gatra_isMainThread__ && __gatra_parentPort__) {
+  __gatra_parentPort__.on('message', async (__gatra_msg__) => {
+    try {
+      const __gatra_fns__ = { ${fnsObj} };
+      const __gatra_result__ = await __gatra_fns__[__gatra_msg__.fn](...__gatra_msg__.args);
+      __gatra_parentPort__.postMessage({ id: __gatra_msg__.id, ok: true, value: __gatra_result__ });
+    } catch (__gatra_err__) {
+      __gatra_parentPort__.postMessage({ id: __gatra_msg__.id, ok: false, error: String((__gatra_err__ && __gatra_err__.message) || __gatra_err__) });
+    }
+  });
+  return;
+}
+const __gatra_scheduler__ = require(${JSON.stringify(SCHEDULER_RUNTIME_PATH)});`;
   }
 
   genPackageImport(node) {
@@ -547,6 +590,22 @@ class CodeGenerator {
     if (typeof node.callee === 'object' && node.callee.type === N.IDENTIFIER) {
       if (node.callee.name === 'berhasil') return `__gatra_berhasil(${args})`;
       if (node.callee.name === 'gagal')    return `__gatra_gagal(${args})`;
+
+      // tanpa_periksa(expr) — Concurrency Safety's 'unsafe' escape hatch
+      // (typechecker.js's checkMoveSafety()/inferIdentifier() are what
+      // actually give it meaning, at compile time); a pure no-op identity
+      // wrapper at runtime.
+      if (node.callee.name === 'tanpa_periksa') return `(${args})`;
+
+      // fungsi paralel — every call goes through the scheduler instead of a
+      // plain call, so it can decide Event Loop vs Worker Pool per call
+      // (Automatic_Concurrency.md). Always Promise-returning; a 'tunggu' the
+      // Gatra source wrote around this call is handled entirely by the
+      // ordinary AWAIT_EXPR codegen wrapping this expression, not here.
+      if (this.parallelFns.has(node.callee.name)) {
+        const name = node.callee.name;
+        return `__gatra_scheduler__.jalankan(${JSON.stringify(name)}, ${name}, __filename, [${args}])`;
+      }
     }
 
     // Resolve callee

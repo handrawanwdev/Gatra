@@ -159,6 +159,7 @@ class Parser {
           // anonymous fn expression in statement position.
           let look = this.pos + 1;
           if (this.tokens[look]?.value === 'async') look++;
+          if (this.tokens[look]?.value === 'parallel') look++;
           if (this.tokens[look]?.type === T.IDENTIFIER) return this.fnDecl();
           // Receiver method: fungsi (h Hewan) sapa(...) — a bare 'IDENT IDENT'
           // pair inside the parens (no ':') is what tells it apart from an
@@ -259,6 +260,13 @@ class Parser {
     let isAsync = false;
     if (this.check(T.KEYWORD, 'async')) { this.advance(); isAsync = true; }
 
+    // Optional parallel modifier: fungsi paralel ... — auto-scheduled onto
+    // the worker pool by the runtime (Automatic_Concurrency.md); always
+    // called through a Promise-returning dispatcher, so 'asinkron' isn't
+    // also required.
+    let isParallel = false;
+    if (this.check(T.KEYWORD, 'parallel')) { this.advance(); isParallel = true; }
+
     // Go-style receiver method: fungsi (h Hewan) sapa(...): tiada { ... }
     // Attaches 'sapa' to struct 'Hewan'; 'h' is bound to the instance inside
     // the body — no 'ini'/'kelas', just a struct plus a func that takes it.
@@ -283,7 +291,7 @@ class Parser {
     }
 
     const body = this.block();
-    return { type: N.FN_DECL, name, params, returnType, body, isAsync, receiver, decorators, line: tok.line, col: tok.col };
+    return { type: N.FN_DECL, name, params, returnType, body, isAsync, isParallel, receiver, decorators, line: tok.line, col: tok.col };
   }
 
   paramList() {

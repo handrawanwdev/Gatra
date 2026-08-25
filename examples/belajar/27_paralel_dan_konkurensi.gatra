@@ -1,0 +1,96 @@
+// 27_paralel_dan_konkurensi.gatra — 'fungsi paralel' (Automatic Concurrency)
+// + Concurrency Safety (ownership/move-checking, closure capture, worker
+// transfer validation). Lihat Automatic_Concurrency.md. Fase 0: scheduler
+// (bounded worker pool + adaptive cost-based dispatch) dan 4 dari 9 analisis
+// statis yang diminta (move/use-after-move, closure capture, worker
+// transfer, escape hatch eksplisit). BELUM ada borrow/lifetime checking atau
+// general mutable-aliasing analysis di luar itu, dan belum ada model
+// single-owner buat matching engine — itu butuh sistem tipe reference/
+// lifetime penuh, di luar cakupan fase ini.
+//
+// Developer cukup tulis 'fungsi paralel', tanpa bikin thread/worker manual.
+// Setiap panggilan lewat scheduler runtime (src/runtime/scheduler.js), yang
+// mutusin Event Loop atau Worker Pool PER PANGGILAN berdasarkan histori
+// durasi eksekusi fungsi itu sendiri — bukan aturan statis "CPU task selalu
+// ke worker".
+
+fungsi paralel jumlahkan(n: angka): angka {
+  isi total = 0
+  isi i = 0
+  selama i < n {
+    total = total + i
+    i = i + 1
+  }
+  balik total
+}
+
+struktur Pesanan {
+  jumlah: angka
+}
+
+fungsi paralel prosesPesanan(p: Pesanan): angka {
+  balik p.jumlah * 2
+}
+
+// Closure capture: 'fungsi paralel' TIDAK BOLEH memakai variabel dari luar
+// — worker menjalankan ulang file ini dari awal dan gak pernah sampai ke
+// baris yang mendeklarasikan variabel itu (lihat komentar genParallelGuard()
+// di codegen.js). Baris di bawah akan GALAT compile time kalau di-uncomment:
+//
+//   isi diskon = 0.1
+//   fungsi paralel hitungDiskon(harga: angka): angka {
+//     balik harga - (harga * diskon)   // SyntaxError: 'diskon' dari luar tidak boleh dipakai
+//   }
+//
+// Perbaikannya: kirim 'diskon' sebagai parameter, bukan tangkap dari luar.
+fungsi paralel hitungDiskonBenar(harga: angka, diskon: angka): angka {
+  balik harga - (harga * diskon)
+}
+
+fungsi asinkron utama(): tiada {
+  // ── Automatic Concurrency: adaptive scheduling ──────────────────────────
+
+  // Panggilan pertama: cold start — belum ada histori, jadi jalan di Event
+  // Loop dulu (jalur paling murah selama belum kebukti mahal).
+  isi hasilKecil = tunggu jumlahkan(1000)
+  cetak(f"jumlahkan(1000) = {hasilKecil}")
+
+  // Panggilan berat berulang: begitu rata-rata durasi ngelewatin ambang
+  // (THRESHOLD_MS di scheduler.js), panggilan BERIKUTNYA otomatis lompat ke
+  // Worker Pool — programmer gak nulis apa pun buat itu, cuma 'tunggu
+  // jumlahkan(...)' polos, persis kayak manggil fungsi asinkron biasa.
+  isi i = 0
+  selama i < 4 {
+    isi hasil = tunggu jumlahkan(20000000)
+    cetak(f"jumlahkan(20000000) run {i} = {hasil}")
+    i = i + 1
+  }
+
+  // Adaptive: begitu beban balik ringan, rata-rata durasi turun lagi di
+  // bawah ambang, dan panggilan berikutnya otomatis balik ke Event Loop —
+  // keputusan itu dievaluasi ulang tiap panggilan, bukan status permanen.
+  isi hasilRingan = tunggu jumlahkan(100)
+  cetak(f"jumlahkan(100) setelah beban berat = {hasilRingan}")
+
+  // ── Concurrency Safety: ownership transfer ──────────────────────────────
+
+  // Mengirim 'p' ke prosesPesanan() memindahkan (moves) kepemilikannya ke
+  // worker/scheduler — 'p' tidak boleh dipakai lagi setelah itu di scope
+  // yang sama. Baris ini akan GALAT kalau di-uncomment:
+  //
+  //   isi p = Pesanan { jumlah: 10 }
+  //   tunggu prosesPesanan(p)
+  //   cetak(p)   // TypeError: 'p' sudah dipindah (moved) ke 'fungsi paralel' sebelumnya
+  //
+  // Escape hatch eksplisit (Unsafe Gatra) kalau programmer yakin aman —
+  // terlihat jelas di source, bukan diam-diam diizinkan:
+  isi p = Pesanan { jumlah: 10 }
+  tunggu prosesPesanan(p)
+  cetak(f"dibaca lagi lewat tanpa_periksa: {tanpa_periksa(p).jumlah}")
+
+  // ── Concurrency Safety: closure capture ─────────────────────────────────
+
+  isi hasilDiskon = tunggu hitungDiskonBenar(100, 0.1)
+  cetak(f"hitungDiskonBenar(100, 0.1) = {hasilDiskon}")
+}
+utama()

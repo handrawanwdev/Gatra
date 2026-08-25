@@ -164,6 +164,33 @@ function makeErrors(grammar) {
       return e('SyntaxError', msg, line, col);
     },
 
+    paralelNeedsTopLevel(name, line, col) {
+      const msg = isID
+        ? `'fungsi paralel' cuma boleh di level atas (top-level) — '${name}' punya receiver`
+        : `'fungsi paralel' can only be a top-level function — '${name}' has a receiver`;
+      return e('SyntaxError', msg, line, col);
+    },
+
+    unsafeClosureCapture(varName, fnName, line, col) {
+      const msg = isID
+        ? `'${varName}' dari luar tidak boleh dipakai di dalam 'fungsi paralel ${fnName}' — worker menjalankan ulang file ini dari awal dan tidak pernah sampai ke deklarasi '${varName}'. Kirim sebagai parameter, atau bungkus dengan 'tanpa_periksa(...)' kalau yakin aman`
+        : `outer variable '${varName}' can't be used inside 'fungsi paralel ${fnName}' — a worker re-runs this file from scratch and never reaches '${varName}''s declaration. Pass it as a parameter instead, or wrap with 'tanpa_periksa(...)' if you're sure it's safe`;
+      return e('SyntaxError', msg, line, col);
+    },
+
+    usedAfterMove(varName, line, col) {
+      const msg = isID
+        ? `'${varName}' sudah dipindah (moved) ke 'fungsi paralel' sebelumnya — tidak boleh dipakai lagi. Kirim ulang lewat variabel baru, atau bungkus penggunaannya dengan 'tanpa_periksa(...)' kalau yakin aman`
+        : `'${varName}' was already moved into a 'fungsi paralel' call earlier — it can't be used again. Reassign it to a fresh variable, or wrap this use with 'tanpa_periksa(...)' if you're sure it's safe`;
+      return e('TypeError', msg, line, col);
+    },
+
+    paralelNeedsPlainData(what, name, structName, line, col) {
+      const msg = isID
+        ? `${what} 'fungsi paralel ${name}' bertipe '${structName}', sebuah struktur ber-method/decorator (jadi 'class' asli) — cuma data polos (angka/teks/logika/larik/peta/struktur tanpa method) yang aman dikirim ke worker`
+        : `${what} of 'fungsi paralel ${name}' is '${structName}', a struct with methods/decorators (a real class) — only plain data (number/string/bool/array/map/struct-without-methods) is safe to send to a worker`;
+      return e('TypeError', msg, line, col);
+    },
   };
 }
 

@@ -21,6 +21,7 @@ const KEYWORD_MAP = {
   'selama':   'while',    // while loop
   'dalam':    'in',       // loop iterator keyword
   'asinkron': 'async',    // async function modifier
+  'paralel':  'parallel', // parallel function modifier — auto-scheduled onto the worker pool
   'tunggu':   'await',    // await expression
   'coba':     'try',      // try block
   'tangkap':  'catch',    // catch block

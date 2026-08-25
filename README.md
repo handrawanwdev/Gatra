@@ -174,12 +174,13 @@ Node.js (V8)
 
 Karena keluarannya JavaScript murni, semua yang bisa dilakukan JavaScript/Node.js bisa dilakukan dari Gatra — termasuk `impor` package dari npm atau modul bawaan Node (`node:http`, `node:fs`, dst), bukan cuma untuk file `.gatra` lokal.
 
-### Dua jalur eksekusi
+### Jalur eksekusi
 
-`gatra jalankan` memilih salah satu dari dua jalur, tergantung isi file:
+`gatra jalankan` memilih salah satu dari tiga jalur, tergantung isi file:
 
 - **CommonJS (default)** — dijalankan lewat `vm.Script` di dalam proses Node yang sama (sandbox in-process). Ini jalur untuk kode Gatra biasa.
 - **ES Module** — begitu hasil kompilasi mengandung `import`/`export` (misalnya karena pakai `impor ... dari "..."` atau `paket`), Gatra otomatis menulis file `.js` sementara dan menjalankannya lewat proses Node terpisah (`node file.js`), karena `import`/`export` adalah sintaks ES Module asli yang tidak bisa dieksekusi lewat `vm.Script` biasa.
+- **`fungsi paralel` (Automatic Concurrency)** — juga ditulis ke file sementara dan dijalankan lewat proses Node terpisah, karena worker pool-nya butuh file asli untuk `new Worker(path)`, dan kode yang dihasilkan pakai `return` di level atas (buat skip efek samping program sendiri saat file yang sama dijalankan ulang di dalam worker) — sesuatu yang cuma valid di file asli, bukan di `vm.Script`. Lihat `Automatic_Concurrency.md`.
 
 ### Kenapa Gatra secepat JavaScript
 
@@ -316,6 +317,12 @@ Semua contoh di bawah ada di `examples/belajar/` — jalankan langsung dengan `g
 | File | Materi |
 |---|---|
 | `19_pengujian.gatra` | `uji`/`pastikan` (pengujian bawaan bahasa) |
+
+### Tahap 9 — Automatic Concurrency (paling lanjut)
+
+| File | Materi |
+|---|---|
+| `27_paralel_dan_konkurensi.gatra` | `fungsi paralel` — bounded worker pool + adaptive cost-based dispatch, plus Concurrency Safety (ownership/move-checking, closure capture, worker transfer validation, escape hatch `tanpa_periksa`) — Fase 0 dari `Automatic_Concurrency.md` |
 
 ---
 

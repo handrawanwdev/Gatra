@@ -137,6 +137,37 @@ function runEsm(sourceFile, js, _sourceCode) {
   }
 }
 
+// ── 'fungsi paralel' runner ──────────────────────────────────────────────────
+//
+// A program using 'fungsi paralel' (Automatic_Concurrency.md) can't run
+// through the normal vm.Script sandbox above: the codegen emits a top-level
+// 'return' (skipping the program's own side effects when this same file gets
+// re-run inside a worker — see scheduler.js/codegen.js's genParallelGuard()
+// comments for the full story), and a top-level 'return' is a SyntaxError in
+// vm.Script (parsed as a plain script, not wrapped in a function) but legal
+// in a real required/spawned file (wrapped in the CommonJS module function).
+// Workers also need a real file path to load via `new Worker(path)` in the
+// first place. So: write to a real temp file and spawn a real Node process,
+// same shape as runEsm() above but without its ES-module-specific import
+// rewriting (this is plain CJS — 'impor' already compiles to a real
+// require() call here, nothing to rewrite).
+function usesParallelScheduler(js) {
+  return js.includes("require('worker_threads')");
+}
+
+function runViaFile(sourceFile, js) {
+  const sourceDir = path.dirname(path.resolve(sourceFile));
+  const tmpDir = fs.mkdtempSync(path.join(sourceDir, ".gatra_tmp_"));
+  try {
+    const mainJs = path.join(tmpDir, "main.js");
+    fs.writeFileSync(mainJs, js, "utf8");
+    const result = spawnSync(process.execPath, [mainJs], { stdio: "inherit" });
+    if (result.status !== 0) process.exit(result.status ?? 1);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 // ── Project build helpers ─────────────────────────────────────────────────────
 
 function findMgFiles(dir) {
@@ -263,6 +294,8 @@ function cmdRun(filePath) {
   try {
     if (js.includes("import ") || js.includes("export ")) {
       runEsm(filePath, js, source);
+    } else if (usesParallelScheduler(js)) {
+      runViaFile(filePath, js);
     } else {
       const ctx = vm.createContext(baseVmGlobals(filePath));
       new vm.Script(js, { filename: filePath }).runInContext(ctx);
@@ -345,6 +378,8 @@ function cmdTest(filePath) {
   try {
     if (js.includes("import ") || js.includes("export ")) {
       runEsm(filePath, js, source);
+    } else if (usesParallelScheduler(js)) {
+      runViaFile(filePath, js);
     } else {
       const ctx = vm.createContext(baseVmGlobals(filePath));
       new vm.Script(js, { filename: filePath }).runInContext(ctx);

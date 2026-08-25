@@ -2568,6 +2568,260 @@ run('executes end-to-end: Tambah(10, 20) works, validasi(10) is rejected at comp
   });
 });
 
+// ── fungsi paralel: Automatic Concurrency (Automatic_Concurrency.md) ───────────
+// Phase 0 only: bounded worker pool + adaptive cost-based dispatch. No
+// ownership/move-checking and no matching-engine single-owner model yet.
+
+console.log('\n── fungsi paralel (Automatic Concurrency) ────────────────────────');
+
+run("parse: 'fungsi paralel nama(...)' sets isParallel (and not isAsync)", () => {
+  const ast = parse(tokenize('fungsi paralel proses(x: angka): angka {\n  balik x\n}'));
+  assertEqual(ast.body[0].isParallel, true);
+  assertEqual(ast.body[0].isAsync, false);
+});
+
+run("parse: 'fungsi paralel (h X) nama()' still parses (rejected later, at typecheck)", () => {
+  const ast = parse(tokenize('fungsi paralel (h X) sapa(): tiada {}'));
+  assertEqual(ast.body[0].isParallel, true);
+  assert(!!ast.body[0].receiver);
+});
+
+run("typechecker: 'tunggu' is legal inside a 'paralel' fn body without also needing 'asinkron'", () => {
+  tc(`impor tempo dari "node:timers/promises"
+  fungsi paralel proses(x: angka): angka {
+    tunggu tempo.setTimeout(1)
+    balik x
+  }`);
+});
+
+run("typechecker: 'fungsi paralel' on a receiver method is rejected", () => {
+  assertThrows(
+    () => tc('struktur X { a: angka }\nfungsi paralel (h X) sapa(): tiada {}'),
+    'top-level'
+  );
+});
+
+run('codegen: calling a paralel fn compiles to __gatra_scheduler__.jalankan(...)', () => {
+  const js = compile('fungsi paralel proses(x: angka): angka {\n  balik x\n}\nisi h = proses(5)');
+  assert(js.includes('__gatra_scheduler__.jalankan("proses", proses, __filename, [5])'), js);
+});
+
+run('codegen: the worker-mode guard + scheduler require are only emitted when a paralel fn exists', () => {
+  assert(!compile('isi x = 1').includes('__gatra_scheduler__'));
+  const js = compile('fungsi paralel proses(x: angka): angka {\n  balik x\n}\nisi h = proses(5)');
+  assert(js.includes("require('worker_threads')"), js);
+  assert(js.includes('__gatra_scheduler__'), js);
+});
+
+// Real subprocess runs below (via the actual 'gatra jalankan' CLI, not the
+// in-process vm.Script exec() helper): a program using 'paralel' compiles a
+// top-level 'return' for its worker-mode guard, which is a SyntaxError under
+// vm.Script (parsed as a plain script, not a function body) — cli/gatra.js
+// routes it through a real temp file + subprocess instead (see
+// usesParallelScheduler()/runViaFile()), so these tests exercise that exact
+// path, not a shortcut.
+function runParallelProgram(src, dir) {
+  const { spawnSync } = require('child_process');
+  const cliPath = path.resolve(__dirname, '../src/cli/gatra.js');
+  const file = path.join(dir, 'main.gatra');
+  fs.writeFileSync(file, src, 'utf8');
+  return spawnSync(process.execPath, [cliPath, 'jalankan', file], { cwd: dir, encoding: 'utf8', timeout: 30000 });
+}
+
+function withTmpDir(fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatra_paralel_'));
+  try { fn(dir); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}
+
+run("executes: a cheap 'paralel' call runs inline (cold start) and returns the right result", () => {
+  withTmpDir((dir) => {
+    const result = runParallelProgram(`
+      fungsi paralel proses(x: angka): angka {
+        balik x * 2
+      }
+      fungsi asinkron utama(): tiada {
+        isi h = tunggu proses(21)
+        cetak(h)
+      }
+      utama()
+    `, dir);
+    assertEqual(result.status, 0);
+    assertEqual(result.stdout.trim(), '42');
+  });
+});
+
+// Regression test for a real bug hit during development: worker.unref()
+// called before its 'message' listener was attached silently re-armed the
+// worker (kept the process alive forever, past its own program's natural
+// end) — and the opposite mistake (leaving it unref'd while a task is
+// in-flight) let the process exit before the reply ever arrived, dropping
+// the result and hanging the awaited Promise unnoticed. This drives a real
+// CPU-bound loop past the escalation threshold (see scheduler.js's
+// THRESHOLD_MS) across several calls, so it must actually round-trip
+// through a real worker more than once, not just stay on the cheap inline
+// path — and the whole subprocess must still exit cleanly on its own.
+run("executes: a 'paralel' fn escalated to the worker pool still returns correct, consistent results across repeated calls, and the process exits cleanly", () => {
+  withTmpDir((dir) => {
+    const result = runParallelProgram(`
+      fungsi paralel jumlahkan(n: angka): angka {
+        isi total = 0
+        isi i = 0
+        selama i < n {
+          total = total + i
+          i = i + 1
+        }
+        balik total
+      }
+      fungsi asinkron utama(): tiada {
+        isi i = 0
+        selama i < 5 {
+          isi h = tunggu jumlahkan(20000000)
+          cetak(h)
+          i = i + 1
+        }
+      }
+      utama()
+    `, dir);
+    assertEqual(result.status, 0);
+    const lines = result.stdout.trim().split('\n');
+    assertEqual(lines.length, 5);
+    assert(lines.every(l => l === '199999990000000'), result.stdout); // sum(0..19999999)
+  });
+});
+
+run("executes: an error thrown inside a 'paralel' fn propagates and is catchable with coba/tangkap", () => {
+  withTmpDir((dir) => {
+    const result = runParallelProgram(`
+      fungsi paralel meledak(x: angka): angka {
+        javascript {
+          throw new Error("rusak: " + x);
+        }
+        balik x
+      }
+      fungsi asinkron utama(): tiada {
+        coba {
+          tunggu meledak(7)
+        } tangkap (e) {
+          cetak(e.message)
+        }
+      }
+      utama()
+    `, dir);
+    assertEqual(result.status, 0);
+    assertEqual(result.stdout.trim(), 'rusak: 7');
+  });
+});
+
+// ── Concurrency Safety: ownership/move/closure-capture/worker-transfer ────────
+// Phase 0 of a much bigger ask (full borrow/lifetime/general aliasing
+// checking is out of scope — see typechecker.js's checkMoveSafety()/
+// checkParallelWorkerTransfer() and inferIdentifier()'s closure-capture
+// comments for exactly what is and isn't covered).
+
+console.log('\n── Concurrency Safety (ownership/move/closure/transfer) ──────────');
+
+run('typechecker: use-after-move — passing a var into a paralel call then reading it again is rejected', () => {
+  assertThrows(() => tc(`struktur Data { nilai: angka }
+    fungsi paralel proses(d: Data): angka { balik d.nilai }
+    fungsi asinkron utama(): tiada {
+      isi data = Data { nilai: 5 }
+      tunggu proses(data)
+      cetak(data)
+    }`), 'sudah dipindah');
+});
+
+run('typechecker: reassigning a moved variable clears the move (fresh ownership)', () => {
+  tc(`struktur Data { nilai: angka }
+  fungsi paralel proses(d: Data): angka { balik d.nilai }
+  fungsi asinkron utama(): tiada {
+    isi data = Data { nilai: 5 }
+    tunggu proses(data)
+    data = Data { nilai: 10 }
+    cetak(data)
+  }`);
+});
+
+run("typechecker: 'tanpa_periksa(x)' lets one read past a move, but doesn't un-move x for a later real call", () => {
+  tc(`struktur Data { nilai: angka }
+  fungsi paralel proses(d: Data): angka { balik d.nilai }
+  fungsi asinkron utama(): tiada {
+    isi data = Data { nilai: 5 }
+    tunggu proses(data)
+    cetak(tanpa_periksa(data))
+  }`);
+  assertThrows(() => tc(`struktur Data { nilai: angka }
+    fungsi paralel proses(d: Data): angka { balik d.nilai }
+    fungsi asinkron utama(): tiada {
+      isi data = Data { nilai: 5 }
+      tunggu proses(data)
+      cetak(tanpa_periksa(data))
+      tunggu proses(data)
+    }`), 'sudah dipindah');
+});
+
+run('typechecker: two independent variables never cross-contaminate move tracking', () => {
+  tc(`struktur Data { nilai: angka }
+  fungsi paralel proses(d: Data): angka { balik d.nilai }
+  fungsi asinkron utama(): tiada {
+    isi a = Data { nilai: 1 }
+    isi b = Data { nilai: 2 }
+    tunggu proses(a)
+    cetak(b)
+  }`);
+});
+
+run("typechecker: closure capture — a 'paralel' fn body referencing an outer top-level var is rejected", () => {
+  assertThrows(
+    () => tc('isi angka1 = 5\nfungsi paralel proses(x: angka): angka {\n  balik x + angka1\n}'),
+    'dari luar tidak boleh dipakai'
+  );
+});
+
+run("typechecker: a 'paralel' fn body using only its own params/locals and other top-level fns is fine", () => {
+  tc(`fungsi bantu(y: angka): angka { balik y * 2 }
+  fungsi paralel proses(x: angka): angka {
+    isi lokal = x + 1
+    isi arr: angka[] = [1, 2, 3]
+    isi hasil = arr.filter((v) => v > lokal)
+    balik bantu(lokal)
+  }`);
+});
+
+run("typechecker: worker transfer validation — a class-backed struct (has a method) param is rejected", () => {
+  assertThrows(() => tc(`struktur Punya { nilai: angka }
+    fungsi (p Punya) ambil(): angka { balik p.nilai }
+    fungsi paralel proses(p: Punya): angka { balik p.nilai }`),
+    'struktur ber-method'
+  );
+});
+
+run('typechecker: worker transfer validation — a plain-data struct (no methods/decorators) param is fine', () => {
+  tc(`struktur Data { nilai: angka }
+  fungsi paralel proses(d: Data): angka { balik d.nilai }`);
+});
+
+run("executes: 'tanpa_periksa(...)' compiles to a transparent no-op — program still runs and returns the right values", () => {
+  withTmpDir((dir) => {
+    const result = runParallelProgram(`
+      struktur Data {
+        nilai: angka
+      }
+      fungsi paralel proses(d: Data): angka {
+        balik d.nilai * 2
+      }
+      fungsi asinkron utama(): tiada {
+        isi data = Data { nilai: 21 }
+        isi hasil = tunggu proses(data)
+        cetak(hasil)
+        cetak(tanpa_periksa(data).nilai)
+      }
+      utama()
+    `, dir);
+    assertEqual(result.status, 0);
+    assertEqual(result.stdout.trim(), '42\n21');
+  });
+});
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 
 console.log(`\nResults: ${passed} passed, ${failed} failed`);
