@@ -245,6 +245,7 @@ class Lexer {
         case '[': this.emit(T.LBRACKET, '[', line, col); break;
         case ']': this.emit(T.RBRACKET, ']', line, col); break;
         case '*': this.emit(T.STAR,   '*',  line, col); break;
+        case '@': this.emit(T.AT,     '@',  line, col); break;
         case '?':
           if (this.peek() === '?')      { this.advance(); this.emit(T.QQ,    '??', line, col); }
           else if (this.peek() === '.') { this.advance(); this.emit(T.QDOT,  '?.', line, col); }

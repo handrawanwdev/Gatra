@@ -29,6 +29,7 @@ const TokenType = {
   AMPERSAND:  'AMPERSAND',  // &
   STAR:       'STAR',       // *
   QUESTION:   'QUESTION',   // ?
+  AT:         'AT',         // @ (decorator)
 
   // Arithmetic operators
   PLUS:       'PLUS',       // +

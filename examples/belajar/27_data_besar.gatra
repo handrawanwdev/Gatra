@@ -1,0 +1,36 @@
+// 27_data_besar.gatra — data<T>, Big Data primitive (lihat BIGDATA_TYPE.md)
+//
+// data<T> itu dataset (lazy, bisa lebih besar dari RAM), bukan larik<T> biasa.
+// Method chaining pakai .method(), field record dirujuk lewat '.field'.
+// Chain baru benar-benar dieksekusi di execution boundary: .kumpulkan()
+// atau .tulis(). Jalankan dari folder ini supaya "27_transaksi.json" ketemu.
+
+struktur Transaksi {
+  negara: teks
+  jumlah: angka
+  pengguna_id: angka
+}
+
+isi transaksi = data.baca<Transaksi>("27_transaksi.json")
+
+isi laporan = transaksi
+  .saring(.jumlah > 0)          // buang transaksi negatif
+  .pilih(.negara, .jumlah)      // proyeksi kolom
+  .kelompok(.negara)            // group by negara
+  .agregat({
+    total: hitung()
+    pendapatan: jumlah(.jumlah)
+    rata_rata: rata_rata(.jumlah)
+  })
+
+cetak(laporan.kumpulkan())
+
+isi diurut = transaksi
+  .urutkan(.jumlah, menurun)
+  .ambil(2)
+  .kumpulkan()
+
+cetak(diurut)
+
+isi statistik = transaksi.statistik()
+cetak(statistik.baris)

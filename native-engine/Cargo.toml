@@ -1,0 +1,23 @@
+[package]
+name = "gatra-native-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Native Big Data engine for Gatra's data<T> primitive (BIGDATA_TYPE.md) — group/aggregate and simple-predicate filtering offloaded from Node/V8 via N-API. MVP: single machine, JSON in/out; no columnar memory, SIMD, or distributed execution yet (see BIGDATA_TYPE.md roadmap)."
+license = "MIT"
+
+[lib]
+# cdylib for the N-API addon Node loads (.node); rlib so `cargo test` can
+# exercise the aggregation/filter logic directly without going through N-API.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { version = "2", default-features = false, features = ["napi4"] }
+napi-derive = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true

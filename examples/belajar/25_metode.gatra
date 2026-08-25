@@ -1,0 +1,55 @@
+// 25_metode.gatra — method ber-receiver, gaya Go — 'fungsi (h Hewan) sapa()'
+//
+// Gatra tidak punya 'kelas'. Perilaku dipasang pada 'struktur' lewat fungsi
+// terpisah yang punya receiver: fungsi (nama TipeStruktur) namaMetode(...).
+// Tidak ada pewarisan — komposisi dipakai lewat field struktur biasa.
+//
+// Di balik layar, struktur yang punya metode dikompilasi ke class JS asli
+// (constructor menyalin field, tiap metode jadi method) — supaya tetap bisa
+// dipakai sebagai target decorator framework (mis. NestJS @Controller/@Injectable).
+
+struktur Hewan {
+  nama: teks
+}
+
+fungsi (h Hewan) sapa(): tiada {
+  cetak(h.nama + " bersuara.")
+}
+
+struktur Akun {
+  saldo: angka
+}
+
+fungsi (a Akun) tampilkan(): tiada {
+  cetak("Saldo:", a.saldo)
+}
+
+fungsi (a Akun) tambah(jumlah: angka): Akun {
+  balik Akun { saldo: a.saldo + jumlah }
+}
+
+// Komposisi, bukan pewarisan — Kucing "punya" Hewan lewat field biasa.
+struktur Kucing {
+  hewan: Hewan
+  ras: teks
+}
+
+fungsi (k Kucing) sapa(): tiada {
+  k.hewan.sapa()
+  cetak(k.ras)
+}
+
+fungsi utama(): tiada {
+  isi hewan = Hewan { nama: "Milo" }
+  hewan.sapa()
+
+  isi akun = buat Akun { saldo: 100 }
+  akun.tampilkan()
+  isi akunBaru = akun.tambah(50)
+  akunBaru.tampilkan()
+
+  isi kucing = Kucing { hewan: Hewan { nama: "Tom" }, ras: "Persia" }
+  kucing.sapa()
+}
+
+utama()

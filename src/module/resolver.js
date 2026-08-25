@@ -37,7 +37,6 @@ function getModuleExports(absPath) {
     switch (stmt.type) {
       case N.FN_DECL:          name = stmt.name; kind = 'fn';     break;
       case N.STRUCT_DECL:      name = stmt.name; kind = 'struct'; break;
-      case N.CLASS_DECL:       name = stmt.name; kind = 'class';  break;
       case N.TYPE_ALIAS_DECL:  name = stmt.name; kind = 'type';   break;
       case N.VAR_DECL:         name = stmt.name; kind = 'var';    break;
       default: continue;

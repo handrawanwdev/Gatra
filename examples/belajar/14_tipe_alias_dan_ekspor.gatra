@@ -10,7 +10,7 @@ fungsi ambilPengguna(id: UserId): Nama {
 cetak(ambilPengguna(7))
 
 // Visibility gaya Go, bukan keyword: huruf awal BESAR pada nama fungsi/
-// struktur/kelas/variabel level modul = publik/terekspor (bisa diimpor modul
+// struktur/variabel level modul = publik/terekspor (bisa diimpor modul
 // lain lewat 'impor { TambahDua } dari "./14_tipe_alias_dan_ekspor"'), huruf
 // awal kecil = internal (lihat examples/paket_matematika.gatra +
 // paket_utama.gatra untuk contoh impor lintas-modul penuh).

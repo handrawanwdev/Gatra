@@ -6,6 +6,7 @@ const path = require("path");
 const vm = require("vm");
 const { spawnSync } = require("child_process");
 const os = require("os");
+const { pathToFileURL } = require("url");
 
 const { tokenize } = require("../lexer/lexer");
 const { parse } = require("../parser/parser");
@@ -112,9 +113,13 @@ function runEsm(sourceFile, js, _sourceCode) {
 
       const tmpMjs = path.join(tmpDir, path.basename(mgAbsPath, ".gatra") + ".js");
       fs.writeFileSync(tmpMjs, mgJs, "utf8");
+      // ES module import specifiers are URL-like, not OS paths — a raw
+      // Windows path ("C:\...") is not a valid specifier (backslashes
+      // aren't a path separator there). pathToFileURL() is correct on
+      // every platform, including POSIX ones.
       finalJs = finalJs
         .split(`from ${quoted}`)
-        .join(`from ${JSON.stringify(tmpMjs)}`);
+        .join(`from ${JSON.stringify(pathToFileURL(tmpMjs).href)}`);
     }
 
     const mainMjs = path.join(tmpDir, "main.js");

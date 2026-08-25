@@ -1,0 +1,10 @@
+node_modules/
+native-engine/target/
+
+# native-engine/gatra-native-engine.<target>.node prebuilt addons ARE
+# committed on purpose (see native-engine/index.js and
+# .github/workflows/native-engine.yml) — that's what lets Gatra's data<T>
+# native path work on a fresh clone with no Rust toolchain installed, same
+# as any other prebuilt Node native addon. Only ignore stray local-only
+# build names that don't match a real platform-target tag.
+native-engine/index.node

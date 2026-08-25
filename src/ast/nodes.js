@@ -44,9 +44,8 @@ const NodeType = {
   OBJECT_TRANSFORM_EXPR: 'ObjectTransformExpr', // dengan X { ... } / ubah X { ... }
   MATCH_RESULT_STMT: 'MatchResultStmt', // cocok expr { berhasil(n) => ... gagal(e) => ... }
   MEASURE_STMT: 'MeasureStmt', // ukur "label" { ... }
-  CLASS_DECL: 'ClassDecl',     // kelas Nama [warisi Induk] { ... }
-  THIS_EXPR:  'ThisExpr',      // ini
-  SUPER_EXPR: 'SuperExpr',     // induk
+  FIELD_EXPR:   'FieldExpr',   // .nama — Big Data field reference (data<T> expression context only)
+  NAMED_ARG:    'NamedArg',    // nama: expr — named argument (e.g. .gabung(x, pada: kondisi))
 };
 
 module.exports = { NodeType };

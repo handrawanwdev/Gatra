@@ -150,10 +150,52 @@ function makeErrors(grammar) {
       return e('TypeError', msg, line, col);
     },
 
+    decoratorNeedsReceiver(name, line, col) {
+      const msg = isID
+        ? `'@${name}' hanya bisa dipasang pada 'struktur' atau method ber-receiver (fungsi (x T) nama(...))`
+        : `'@${name}' can only decorate a 'struktur' or a receiver method (fungsi (x T) name(...))`;
+      return e('SyntaxError', msg, line, col);
+    },
+
     awaitInNonAsync(fnName, line, col) {
       const msg = isID
         ? `fungsi '${fnName}' bukan asinkron — tambahkan 'asinkron' pada deklarasi`
         : `function '${fnName}' is not async — add 'async' to its declaration`;
+      return e('SyntaxError', msg, line, col);
+    },
+
+    fieldExprOutsideDataset(name, line, col) {
+      const msg = isID
+        ? `'.${name}' (field reference) hanya valid di dalam ekspresi data<T>, mis. .saring(), .pilih(), .agregat()`
+        : `'.${name}' (field reference) is only valid inside a data<T> expression, e.g. .saring(), .pilih(), .agregat()`;
+      return e('SyntaxError', msg, line, col);
+    },
+
+    expectedFieldReference(method, line, col) {
+      const msg = isID
+        ? `'${method}()' hanya menerima field reference (.nama), bukan ekspresi bebas`
+        : `'${method}()' only accepts a field reference (.name), not an arbitrary expression`;
+      return e('SyntaxError', msg, line, col);
+    },
+
+    invalidSortDirection(word, line, col) {
+      const msg = isID
+        ? `Arah urut '${word}' tidak dikenal — gunakan 'menaik' atau 'menurun'`
+        : `Unknown sort direction '${word}' — use 'menaik' (ascending) or 'menurun' (descending)`;
+      return e('SyntaxError', msg, line, col);
+    },
+
+    invalidAggregateSpec(line, col) {
+      const msg = isID
+        ? `Field '.agregat({...})' harus berupa panggilan fungsi agregat: hitung(), jumlah(.f), rata_rata(.f), minimum(.f), maksimum(.f)`
+        : `Each '.agregat({...})' field must be an aggregate function call: hitung(), jumlah(.f), rata_rata(.f), minimum(.f), maksimum(.f)`;
+      return e('SyntaxError', msg, line, col);
+    },
+
+    gabungNeedsPada(line, col) {
+      const msg = isID
+        ? `'.gabung()' butuh argumen 'pada: kondisi' untuk menentukan kondisi join`
+        : `'.gabung()' requires a 'pada: condition' argument to define the join condition`;
       return e('SyntaxError', msg, line, col);
     },
   };

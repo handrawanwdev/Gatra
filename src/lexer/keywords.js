@@ -39,17 +39,11 @@ const KEYWORD_MAP = {
   'dengan':   'with',     // dengan expr { field ... } — transformasi objek
   'cocok':    'match',    // cocok expr { berhasil(n) => ... gagal(e) => ... } — pattern match hasil<T,E>
   'ukur':     'measure',  // ukur "label" { ... } — cetak durasi eksekusi blok (observability)
-  'kelas':    'class',
-  'konstruk': 'constructor',
-  'ini':      'this',
-  'induk':    'super',
-  'warisi':   'extends',   // kelas Kucing warisi Hewan { ... }
-  'statis':   'static',
-  'privat':   'private',
-  // 'ambil' (getter) dan 'atur' (setter) SENGAJA tidak masuk di sini — kata
-  // umum yang lumrah dipakai sebagai nama fungsi/variabel biasa (mis. fungsi
-  // 'ambil'). Dikenali kontekstual di parser lewat lookahead 2 IDENTIFIER
-  // berturut-turut di dalam badan 'kelas' (lihat classDecl() di parser.js).
+  // Gatra tidak punya 'kelas' (class) — perilaku bertipe dipasang lewat method
+  // ber-receiver, gaya Go: 'fungsi (h Hewan) sapa() { ... }' (lihat fnDecl()
+  // di parser.js). Tidak ada 'ini'/'induk'/'warisi'/'statis'/'privat' — nama
+  // receiver ('h' di atas) sudah berperan sebagai 'ini', dan tidak ada
+  // pewarisan (komposisi via field struct biasa, gaya Go).
   //
   // 'ekspor' TIDAK ADA LAGI — visibility sekarang murni dari huruf awal nama
   // identifier (gaya Go): huruf besar = publik/terekspor, huruf kecil =

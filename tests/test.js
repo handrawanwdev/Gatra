@@ -128,7 +128,12 @@ run('skips line comments', () => {
 });
 
 run('throws on unknown character', () => {
-  assertThrows(() => tokenize('@'), "Unexpected character '@'");
+  assertThrows(() => tokenize('$'), "Unexpected character '$'");
+});
+
+run('tokenizes @ as AT (decorator)', () => {
+  const toks = tokenize('@Controller');
+  assertEqual(toks[0].type, TokenType.AT);
 });
 
 run('handles escape sequences in strings', () => {
@@ -2157,159 +2162,232 @@ run('executes: ukur still logs duration even when the body returns early', () =>
   }
 });
 
-// ── kelas: constructor / method / static / extends / super / getter / setter / private ──
+// ── receiver methods: fungsi (h Struct) nama(...) { ... } — Go-style, no class ──
 
-console.log('\n── kelas ───────────────────────────────────────────────────────');
+console.log('\n── receiver methods ────────────────────────────────────────────');
 
-run('parse: kelas produces a ClassDecl with fields, constructor, and methods', () => {
-  const ast = parse(tokenize('kelas Pengguna {\n  nama: teks\n  konstruk(nama: teks) {\n    ini.nama = nama\n  }\n  sapa() {\n    cetak(ini.nama)\n  }\n}'));
-  const node = ast.body[0];
-  assertEqual(node.type, N.CLASS_DECL);
-  assertEqual(node.members.filter(m => m.kind === 'field').length, 1);
-  assertEqual(node.members.filter(m => m.kind === 'constructor').length, 1);
-  assertEqual(node.members.filter(m => m.kind === 'method').length, 1);
+run('parse: receiver method produces an FnDecl with receiver { name, type }', () => {
+  const ast = parse(tokenize('struktur Hewan {\n  nama: teks\n}\nfungsi (h Hewan) sapa(): tiada {\n  cetak(h.nama)\n}'));
+  const node = ast.body[1];
+  assertEqual(node.type, N.FN_DECL);
+  assertEqual(node.name, 'sapa');
+  assertEqual(node.receiver.name, 'h');
+  assertEqual(node.receiver.type, 'Hewan');
 });
 
-run('parse: kelas warisi produces a superclass name', () => {
-  const ast = parse(tokenize('kelas Kucing warisi Hewan {}'));
-  assertEqual(ast.body[0].superclass, 'Hewan');
+run('parse: a plain fungsi (no receiver) still has receiver === null', () => {
+  const ast = parse(tokenize('fungsi tambah(a: angka, b: angka): angka { balik a + b }'));
+  assertEqual(ast.body[0].receiver, null);
 });
 
-run('parse: ini/induk produce ThisExpr/SuperExpr', () => {
-  const ast = parse(tokenize('kelas X warisi Y {\n  konstruk() {\n    induk.konstruk()\n    ini.a = 1\n  }\n}'));
-  const ctor = ast.body[0].members[0];
-  const superCall = ctor.body.body[0].expr;
-  assertEqual(superCall.callee.object.type, N.SUPER_EXPR);
-  assertEqual(ctor.body.body[1].expr.target.object.type, N.THIS_EXPR);
+run('parse: anonymous fn expression with typed params (colon inside parens) is NOT mistaken for a receiver', () => {
+  const ast = parse(tokenize('isi f = fungsi(a: angka): angka { balik a }'));
+  assertEqual(ast.body[0].value.type, N.FUNC_EXPR);
 });
 
-run('parse: statis/privat modifiers on class members', () => {
-  const ast = parse(tokenize('kelas X {\n  statis privat rahasia: angka = 1\n  statis bantu() {}\n}'));
-  const field = ast.body[0].members[0];
-  assertEqual(field.isStatic, true);
-  assertEqual(field.isPrivate, true);
-  assertEqual(ast.body[0].members[1].isStatic, true);
+run('typechecker: receiver type must be an existing struct', () => {
+  assertThrows(() => tc('fungsi (h TidakAda) sapa(): tiada {}'), "'TidakAda'");
 });
 
-run("parse: 'ambil'/'atur' outside a getter/setter position stay plain identifiers (no false-positive keyword collision)", () => {
-  const ast = parse(tokenize('fungsi ambil(): angka { balik 1 }\nisi atur = 5'));
-  assertEqual(ast.body[0].name, 'ambil');
-  assertEqual(ast.body[1].name, 'atur');
+run('typechecker: duplicate method name on the same struct is rejected', () => {
+  assertThrows(() => tc('struktur X { a: angka }\nfungsi (x X) sama(): tiada {}\nfungsi (x X) sama(): tiada {}'), 'sama');
 });
 
-run("parse: 'ambil nama()' inside a kelas is read as a getter, not a field/method named 'ambil'", () => {
-  const ast = parse(tokenize('kelas X {\n  ambil saldo(): angka {\n    balik 1\n  }\n}'));
-  assertEqual(ast.body[0].members[0].kind, 'getter');
-  assertEqual(ast.body[0].members[0].name, 'saldo');
+run('typechecker: two different structs may each have a method with the same name', () => {
+  tc('struktur A { a: angka }\nstruktur B { b: angka }\nfungsi (x A) info(): tiada {}\nfungsi (x B) info(): tiada {}');
 });
 
-run("parse: a method literally named 'ambil' (single identifier + paren) is NOT mistaken for a getter", () => {
-  const ast = parse(tokenize('kelas X {\n  ambil(): angka {\n    balik 1\n  }\n}'));
-  assertEqual(ast.body[0].members[0].kind, 'method');
-  assertEqual(ast.body[0].members[0].name, 'ambil');
+run('typechecker: field access on a receiver-typed param type-checks against its struct fields', () => {
+  assertThrows(
+    () => tc('struktur Hewan { nama: teks }\nfungsi (h Hewan) sapa(): tiada {\n  cetak(h.tidakAda)\n}'),
+    'tidakAda'
+  );
 });
 
-run('typechecker: unknown superclass is rejected', () => {
-  assertThrows(() => tc('kelas X warisi TidakAda {}'), "'TidakAda'");
+run('codegen: a struct with no receiver methods still compiles to a type-only comment', () => {
+  const js = compile('struktur Titik {\n  x: angka\n  y: angka\n}');
+  assert(js.includes('// struct Titik'), js);
 });
 
-run('typechecker: ClassName(args) call infers the class name as its type and marks _isConstruct', () => {
-  const ast = parse(tokenize('kelas Titik {\n  konstruk(x: angka) {\n    ini.x = x\n  }\n}\nisi p = Titik(1)'));
-  typecheck(ast, 'id');
-  const callNode = ast.body[1].value;
-  assertEqual(callNode._isConstruct, true);
-  assertEqual(callNode._type, 'Titik');
+run('codegen: a struct with a receiver method compiles to a real JS class', () => {
+  const js = compile('struktur Hewan {\n  nama: teks\n}\nfungsi (h Hewan) sapa(): tiada {\n  cetak(h.nama + " bersuara.")\n}');
+  assert(js.includes('class Hewan {'), js);
+  assert(js.includes('constructor(o) { Object.assign(this, o); }'), js);
+  assert(js.includes('sapa() {'), js);
+  assert(js.includes('const h = this;'), js);
 });
 
-run('codegen: kelas compiles to a real JS class with constructor/method', () => {
-  const js = compile('kelas Pengguna {\n  nama: teks\n  konstruk(nama: teks) {\n    ini.nama = nama\n  }\n  sapa() {\n    cetak(ini.nama)\n  }\n}');
-  assert(js.includes('class Pengguna {'), js);
-  assert(js.includes('constructor(nama) {'), js);
-  assert(js.includes('this.nama = nama;'), js);
+run('codegen: struct init compiles to new ClassName({...}) once the struct has a method, plain object otherwise', () => {
+  const js = compile('struktur Hewan {\n  nama: teks\n}\nfungsi (h Hewan) sapa(): tiada {}\nisi a = Hewan { nama: "Milo" }');
+  assert(js.includes('new Hewan({ nama: "Milo" })'), js);
+
+  const jsPlain = compile('struktur Titik {\n  x: angka\n  y: angka\n}\nisi p = Titik { x: 1, y: 2 }');
+  assert(jsPlain.includes('let p = { x: 1, y: 2 }'), jsPlain);
+});
+
+run("codegen: 'buat Struct { ... }' works the same as plain struct init (buat is a no-op prefix)", () => {
+  const js = compile('struktur Hewan {\n  nama: teks\n}\nfungsi (h Hewan) sapa(): tiada {}\nisi a = buat Hewan { nama: "Milo" }');
+  assert(js.includes('new Hewan({ nama: "Milo" })'), js);
+});
+
+run('codegen: struct-class emission does not depend on source order between struct and method (pure codegen, bypassing the typechecker\'s declare-before-use rule)', () => {
+  const ast = parse(tokenize('fungsi (h Hewan) sapa(): tiada {\n  cetak(h.nama)\n}\nstruktur Hewan {\n  nama: teks\n}'));
+  const js = generate(ast);
+  assert(js.includes('class Hewan {'), js);
   assert(js.includes('sapa() {'), js);
 });
 
-run('codegen: ClassName(args) compiles to new ClassName(args)', () => {
-  const js = compile('kelas Titik {\n  konstruk(x: angka) {\n    ini.x = x\n  }\n}\nisi p = Titik(1)');
-  assert(js.includes('let p = new Titik(1)'), js);
+run('executes: receiver method reads fields off the bound instance', () => {
+  const out = exec('struktur Hewan {\n  nama: teks\n}\nfungsi (h Hewan) sapa(): tiada {\n  cetak(h.nama + " bersuara.")\n}\nisi a = Hewan { nama: "Milo" }\na.sapa()');
+  assertEqual(out[0], 'Milo bersuara.');
 });
 
-run("codegen: 'buat ClassName(args)' also compiles to new ClassName(args) (buat is a no-op prefix)", () => {
-  const js = compile('kelas Titik {\n  konstruk(x: angka) {\n    ini.x = x\n  }\n}\nisi p = buat Titik(1)');
-  assert(js.includes('let p = new Titik(1)'), js);
+run('executes: two structs can each carry a method of the same name without clashing', () => {
+  const out = exec('struktur Kucing {\n  nama: teks\n}\nfungsi (k Kucing) suara(): tiada {\n  cetak(k.nama + ": Meong")\n}\nstruktur Anjing {\n  nama: teks\n}\nfungsi (a Anjing) suara(): tiada {\n  cetak(a.nama + ": Guk")\n}\nisi k = Kucing { nama: "Milo" }\nisi a = Anjing { nama: "Rex" }\nk.suara()\na.suara()');
+  assertEqual(out[0], 'Milo: Meong');
+  assertEqual(out[1], 'Rex: Guk');
 });
 
-run('codegen: kelas warisi compiles to extends, induk.konstruk() to super(), induk.x() to super.x()', () => {
-  const js = compile('kelas A {\n  konstruk() {}\n  m() {}\n}\nkelas B warisi A {\n  konstruk() {\n    induk.konstruk()\n  }\n  m() {\n    induk.m()\n  }\n}');
-  assert(js.includes('class B extends A {'), js);
-  assert(js.includes('super();'), js);
-  assert(js.includes('super.m();'), js);
-  assert(!js.includes('super.konstruk'), js);
-});
-
-run('codegen: privat field compiles to a real JS #private field, accessed via this.#name', () => {
-  const js = compile('kelas Akun {\n  privat saldo: angka = 0\n  konstruk() {\n    ini.saldo = 1\n  }\n}');
-  assert(js.includes('#saldo = 0;'), js);
-  assert(js.includes('this.#saldo = 1;'), js);
-  assert(!js.includes('this.saldo'), js);
-});
-
-run('codegen: getter/setter compile to real JS get/set accessors', () => {
-  const js = compile('kelas Akun {\n  privat saldo: angka = 0\n  ambil saldo(): angka {\n    balik ini.saldo\n  }\n  atur saldo(v: angka) {\n    ini.saldo = v\n  }\n}');
-  assert(js.includes('get saldo() {'), js);
-  assert(js.includes('set saldo(v) {'), js);
-});
-
-run('codegen: statis method compiles to a real JS static method', () => {
-  const js = compile('kelas Akun {\n  konstruk() {}\n  statis buatKosong(): Akun {\n    balik Akun()\n  }\n}');
-  assert(js.includes('static buatKosong() {'), js);
-});
-
-run('executes: full inheritance chain — constructor, super(), overridden method, super.method()', () => {
-  const out = exec('kelas Hewan {\n  konstruk(nama: teks) {\n    ini.nama = nama\n  }\n  sapa() {\n    cetak("..." + ini.nama)\n  }\n}\nkelas Kucing warisi Hewan {\n  konstruk(nama: teks) {\n    induk.konstruk(nama)\n  }\n  sapa() {\n    induk.sapa()\n    cetak("Meong")\n  }\n}\nisi k = Kucing("Tom")\nk.sapa()');
-  assertEqual(out[0], '...Tom');
-  assertEqual(out[1], 'Meong');
-});
-
-run('executes: private field is genuinely inaccessible from outside the class (real JS #field)', () => {
-  // 'privat' compiles to a real JS #field. Outside the class 'a.saldo' is a plain
-  // property lookup on an object that has no such key — it reads undefined, it
-  // does not throw (only textual a.#saldo outside the class body would throw/SyntaxError).
-  assert(!/this\.saldo\b/.test(compile('kelas Akun {\n  privat saldo: angka = 0\n  konstruk(s: angka) {\n    ini.saldo = s\n  }\n}')), 'privat field must compile to #saldo, not this.saldo');
-  const out = exec('kelas Akun {\n  privat saldo: angka = 0\n  konstruk(s: angka) {\n    ini.saldo = s\n  }\n}\nisi a = Akun(50)\ncetak(a.saldo)');
-  assertEqual(out[0], ''); // mock console: [].join(' ') on [undefined] stringifies to ''
-});
-
-run('executes: getter/setter round-trip through a private field', () => {
-  const out = exec('kelas Akun {\n  privat saldo: angka = 0\n  konstruk(s: angka) {\n    ini.saldo = s\n  }\n  ambil saldo(): angka {\n    balik ini.saldo\n  }\n  atur saldo(v: angka) {\n    ini.saldo = v\n  }\n}\nisi a = Akun(10)\ncetak(a.saldo)\na.saldo = 77\ncetak(a.saldo)');
-  assertEqual(out[0], '10');
-  assertEqual(out[1], '77');
-});
-
-run('linter: class method params do not trigger unused-variable warnings', () => {
-  const ast = parse(tokenize('kelas X {\n  konstruk(a: angka) {\n    ini.a = a\n  }\n}'));
+run('linter: receiver name does not trigger an unused-variable warning', () => {
+  const ast = parse(tokenize('struktur Hewan {\n  nama: teks\n}\nfungsi (h Hewan) sapa(): tiada {\n  cetak(h.nama)\n}'));
   assertEqual(lint(ast).length, 0);
 });
 
-run('formatter: kelas round-trips (warisi, konstruk, ambil/atur, statis, privat)', () => {
-  const src = 'kelas Akun {\n  privat saldo: angka = 0\n\n  konstruk(s: angka) {\n    ini.saldo = s\n  }\n\n  ambil saldo(): angka {\n    balik ini.saldo\n  }\n\n  atur saldo(v: angka) {\n    ini.saldo = v\n  }\n\n  statis buatKosong(): Akun {\n    balik Akun(0)\n  }\n}';
+run('formatter: receiver method round-trips', () => {
+  const src = 'struktur Hewan {\n  nama: teks\n}\n\nfungsi (h Hewan) sapa(): tiada {\n  cetak(h.nama)\n}';
   const once = format(src);
-  assert(once.includes('kelas Akun {'), once);
-  assert(once.includes('privat saldo: angka = 0'), once);
-  assert(once.includes('konstruk(s: angka)'), once);
-  assert(once.includes('ambil saldo(): angka'), once);
-  assert(once.includes('atur saldo(v: angka)'), once);
-  assert(once.includes('statis buatKosong(): Akun'), once);
+  assert(once.includes('fungsi (h Hewan) sapa(): tiada'), once);
   assertEqual(once, format(once));
 });
 
-run('formatter: kelas warisi / ini / induk round-trip', () => {
-  const src = 'kelas Kucing warisi Hewan {\n  konstruk(nama: teks) {\n    induk.konstruk(nama)\n  }\n\n  sapa() {\n    induk.sapa()\n    cetak(ini.nama)\n  }\n}';
+// ── @Decorator: struct/method/param — tsc-style __decorate/__param/__metadata ──
+// so NestJS's DI container (Reflect.getMetadata('design:paramtypes', ...)) and
+// param decorators (@Body/@Param/@Query) actually work, not just parse.
+
+console.log('\n── decorator ────────────────────────────────────────────────────');
+
+run('parse: @Nama(args) on a struktur is collected into node.decorators', () => {
+  const ast = parse(tokenize('@Controller("pengguna")\nstruktur X {\n  a: angka\n}'));
+  const node = ast.body[0];
+  assertEqual(node.type, N.STRUCT_DECL);
+  assertEqual(node.decorators.length, 1);
+  assertEqual(node.decorators[0].name, 'Controller');
+  assertEqual(node.decorators[0].args[0].value, 'pengguna');
+});
+
+run('parse: multiple stacked decorators on a receiver method, and bare @Nama with no parens', () => {
+  const ast = parse(tokenize('struktur X {\n  a: angka\n}\n@Get()\n@UseGuards\nfungsi (x X) m(): tiada {}'));
+  const fn = ast.body[1];
+  assertEqual(fn.decorators.length, 2);
+  assertEqual(fn.decorators[0].name, 'Get');
+  assertEqual(fn.decorators[1].name, 'UseGuards');
+  assertEqual(fn.decorators[1].args.length, 0);
+});
+
+run('parse: @Nama() on a method parameter is collected into param.decorators', () => {
+  const ast = parse(tokenize('struktur X {\n  a: angka\n}\nfungsi (x X) m(@Param("id") id: teks): tiada {}'));
+  const param = ast.body[1].params[0];
+  assertEqual(param.decorators.length, 1);
+  assertEqual(param.decorators[0].name, 'Param');
+});
+
+run('parse: a plain (non-receiver) fungsi has decorators === []', () => {
+  const ast = parse(tokenize('fungsi biasa(): tiada {}'));
+  assertEqual(ast.body[0].decorators.length, 0);
+});
+
+run('typechecker: an undefined decorator name is rejected like any other unresolved identifier', () => {
+  assertThrows(() => tc('struktur X {\n  a: angka\n}\n@TidakAda()\nfungsi (x X) m(): tiada {}'), "'TidakAda'");
+});
+
+run('typechecker: decorator on a plain (non-receiver) fungsi is rejected — nothing to attach it to', () => {
+  assertThrows(() => tc('fungsi Deco(): apa_saja { balik kosong }\n@Deco()\nfungsi biasa(): tiada {}'), 'Deco');
+});
+
+run('typechecker: decorator on a plain fungsi parameter is rejected the same way', () => {
+  assertThrows(() => tc('fungsi Deco(): apa_saja { balik kosong }\nfungsi biasa(@Deco() x: angka): tiada {}'), 'Deco');
+});
+
+run('typechecker: decorator args type-check like normal call arguments (undefined var inside one still errors)', () => {
+  assertThrows(() => tc('struktur X {\n  a: angka\n}\nfungsi Deco(v: apa_saja): apa_saja { balik kosong }\n@Deco(tidakAda)\nstruktur Y {\n  b: angka\n}'), "'tidakAda'");
+});
+
+run('codegen: decorator prelude (__decorate/__param/__metadata) is omitted when no decorator is used', () => {
+  const js = compile('struktur Titik {\n  x: angka\n}');
+  assert(!js.includes('__decorate'), js);
+});
+
+run('codegen: a struct-level decorator wraps the class in __decorate and switches to a positional constructor', () => {
+  const js = compile('fungsi Injectable(): apa_saja { balik kosong }\n@Injectable()\nstruktur PenggunaService {\n  nama: teks\n}');
+  assert(js.includes('let PenggunaService = class PenggunaService {'), js);
+  assert(js.includes('constructor(nama) {'), js);
+  assert(js.includes('this.nama = nama;'), js);
+  assert(js.includes('PenggunaService = __decorate([\n  Injectable(),\n  __metadata("design:paramtypes", [String])\n], PenggunaService);'), js);
+});
+
+run('codegen: a struct decorator alone (no receiver methods at all) still produces a real class, not a comment', () => {
+  const js = compile('fungsi Injectable(): apa_saja { balik kosong }\n@Injectable()\nstruktur X {\n  a: angka\n}');
+  assert(js.includes('class X {'), js);
+  assert(!js.includes('// struct X'), js);
+});
+
+run('codegen: method decorator compiles to a __decorate call against the prototype', () => {
+  const js = compile('struktur X {\n  a: angka\n}\nfungsi Get(): apa_saja { balik kosong }\n@Get()\nfungsi (x X) m(): tiada {}');
+  assert(js.includes('__decorate([\n  Get()\n], X.prototype, "m", null);'), js);
+});
+
+run('codegen: parameter decorator compiles to a __param(index, ...) entry inside the method\'s __decorate call', () => {
+  const js = compile('struktur X {\n  a: angka\n}\nfungsi Param(n: teks): apa_saja { balik kosong }\nfungsi (x X) m(@Param("id") id: teks): tiada {}');
+  assert(js.includes('__decorate([\n  __param(0, Param("id"))\n], X.prototype, "m", null);'), js);
+});
+
+run('codegen: design:paramtypes maps primitive/array/unknown-struct types to their JS constructor, and a class-struct field to its own class reference', () => {
+  const js = compile('fungsi Injectable(): apa_saja { balik kosong }\n@Injectable()\nstruktur Dep {\n  a: angka\n}\nfungsi (d Dep) m(): tiada {}\n@Injectable()\nstruktur Svc {\n  n: angka\n  s: teks\n  lst: angka[]\n  dep: Dep\n}');
+  assert(js.includes('__metadata("design:paramtypes", [Number, String, Array, Dep])'), js);
+});
+
+run('codegen: struct init for a decorated struct compiles to new X(field1, field2) positionally, ordered by declaration (not literal order)', () => {
+  const js = compile('fungsi Injectable(): apa_saja { balik kosong }\n@Injectable()\nstruktur X {\n  a: angka\n  b: teks\n}\nisi v = X { b: "y", a: 1 }');
+  assert(js.includes('new X(1, "y")'), js);
+});
+
+run("executes: decorators fire at class-definition time, and DI-style positional instantiation + method call work", () => {
+  const out = exec(`
+fungsi Controller(nama: teks) {
+  balik fungsi(target: apa_saja) {
+    balik target
+  }
+}
+
+fungsi Get() {
+  balik fungsi(target: apa_saja, key: apa_saja) {
+    cetak("Get:", key)
+  }
+}
+
+@Controller("pengguna")
+struktur PenggunaController {
+  id: angka
+}
+
+@Get()
+fungsi (c PenggunaController) info(): angka {
+  balik c.id
+}
+
+isi ctrl = PenggunaController { id: 42 }
+cetak(ctrl.info())
+`);
+  assertEqual(out[0], 'Get: info');
+  assertEqual(out[1], '42');
+});
+
+run('formatter: decorators on struktur, receiver method, and a method parameter round-trip', () => {
+  const src = '@Controller("pengguna")\nstruktur PenggunaController {\n  a: angka\n}\n\n@Get()\nfungsi (c PenggunaController) m(@Param("id") id: teks): tiada {}';
   const once = format(src);
-  assert(once.includes('kelas Kucing warisi Hewan {'), once);
-  assert(once.includes('induk.konstruk(nama)'), once);
-  assert(once.includes('induk.sapa()'), once);
-  assert(once.includes('cetak(ini.nama)'), once);
+  assert(once.includes('@Controller("pengguna")'), once);
+  assert(once.includes('@Get()'), once);
+  assert(once.includes('@Param("id") id: teks'), once);
   assertEqual(once, format(once));
 });
 
@@ -2359,22 +2437,18 @@ run('formatter: named import round-trips', () => {
   assertEqual(once, format(once));
 });
 
-run('codegen: paket only exports capitalized top-level names (fn/struct/kelas/var)', () => {
+run('codegen: paket only exports capitalized top-level names (fn/struct/var)', () => {
   const js = compile(`
 paket matematika
 fungsi Tambah(a: angka, b: angka): angka { balik a + b }
 fungsi validasi(a: angka): logika { balik a > 0 }
 struktur Titik { x: angka, y: angka }
 struktur titikInternal { x: angka }
-kelas Akun { konstruk() {} }
-kelas akunInternal { konstruk() {} }
 isi Batas = 100
 isi batasInternal = 1
 `);
   assert(js.includes('export function Tambah'), js);
   assert(!js.includes('export function validasi'), js);
-  assert(js.includes('export class Akun'), js);
-  assert(!js.includes('export class akunInternal'), js);
   assert(js.includes('export let Batas'), js);
   assert(!js.includes('export let batasInternal'), js);
 });
@@ -2492,6 +2566,356 @@ run('executes end-to-end: Tambah(10, 20) works, validasi(10) is rejected at comp
     assert(badResult.stderr.includes('GALAT AKSES'), badResult.stderr);
     assert(badResult.stderr.includes('tidak dapat diakses dari modul ini'), badResult.stderr);
   });
+});
+
+// ── data<T>: Big Data primitive (BIGDATA_TYPE.md) ────────────────────────────
+
+console.log('\n── data<T> (Big Data primitive) ────────────────────────────────');
+
+// Compiles and runs `src` as a real Node subprocess inside `dir` (so
+// relative dataset paths like "transaksi.json" resolve against real files on
+// disk) — needed because generated data<T> code does a real require() of
+// the runtime module, which a bare vm.Script sandbox (see exec() above)
+// doesn't support.
+function execDataset(src, dir) {
+  const { spawnSync } = require('child_process');
+  const path = require('path');
+  const fs   = require('fs');
+  const js = compile(src);
+  const tmp = path.join(dir, `__gatra_dataset_test_${Date.now()}_${Math.random().toString(36).slice(2)}.js`);
+  fs.writeFileSync(tmp, js, 'utf8');
+  try {
+    const result = spawnSync(process.execPath, [tmp], { cwd: dir, encoding: 'utf8' });
+    if (result.status !== 0) throw new Error(`subprocess failed (status ${result.status}): ${result.stderr}`);
+    return result.stdout;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+function withDatasetFixture(files, fn) {
+  const os   = require('os');
+  const path = require('path');
+  const fs   = require('fs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatra_dataset_'));
+  try {
+    for (const [name, content] of Object.entries(files)) {
+      fs.writeFileSync(path.join(dir, name), content, 'utf8');
+    }
+    fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const TRANSAKSI_JSON = JSON.stringify([
+  { negara: 'ID', jumlah: 100, pengguna_id: 1 },
+  { negara: 'ID', jumlah: -20, pengguna_id: 2 },
+  { negara: 'US', jumlah: 300, pengguna_id: 1 },
+  { negara: 'US', jumlah: 50, pengguna_id: 3 },
+]);
+const PENGGUNA_JSON = JSON.stringify([
+  { id: 1, nama: 'Andi' },
+  { id: 2, nama: 'Budi' },
+  { id: 3, nama: 'Citra' },
+]);
+
+// -- parser --
+
+run('parse: .field is a FieldExpr in expression position', () => {
+  const ast = parse(tokenize('isi x = pengguna.saring(.umur >= 18)'));
+  const call = ast.body[0].value; // CallExpr
+  assertEqual(call.args[0].left.type, N.FIELD_EXPR);
+  assertEqual(call.args[0].left.name, 'umur');
+});
+
+run('parse: data<T> is a valid variable type annotation', () => {
+  const ast = parse(tokenize('isi t: data<Transaksi> = data.baca<Transaksi>("x.json")'));
+  assertEqual(ast.body[0].varType, 'data<Transaksi>');
+});
+
+run('parse: data.baca<T>(path) attaches typeArg to the MemberExpr callee', () => {
+  const ast = parse(tokenize('isi t = data.baca<Transaksi>("x.json")'));
+  assertEqual(ast.body[0].value.callee.typeArg, 'Transaksi');
+});
+
+run('parse: nama: expr inside a call becomes a NamedArg', () => {
+  const ast = parse(tokenize('isi h = t.gabung(u, pada: .a == .b)'));
+  const namedArg = ast.body[0].value.args[1];
+  assertEqual(namedArg.type, N.NAMED_ARG);
+  assertEqual(namedArg.name, 'pada');
+});
+
+run("parse: '.ubah()' and '.pilih()' (reserved words elsewhere) work as dataset method names after '.'", () => {
+  const ast = parse(tokenize('isi a = t.ubah(.nama)\nisi b = t.pilih(.nama)'));
+  assertEqual(ast.body[0].value.callee.member, 'ubah');
+  assertEqual(ast.body[1].value.callee.member, 'pilih');
+});
+
+run('parse: .gabung.kiri(...) chains as nested member/call, no special grammar needed', () => {
+  const ast = parse(tokenize('isi h = t.gabung.kiri(u, pada: .a == .b)'));
+  assertEqual(ast.body[0].value.callee.member, 'kiri');
+  assertEqual(ast.body[0].value.callee.object.member, 'gabung');
+});
+
+// -- typechecker --
+
+run('typechecker: .field outside any data<T> expression is rejected', () => {
+  assertThrows(() => tc('isi x = .umur'), "'.umur'");
+});
+
+run('typechecker: full canonical pipeline (saring/pilih/kelompok/agregat/tulis) type-checks', () => {
+  tc(`struktur Transaksi {
+    negara: teks
+    jumlah: angka
+  }
+  isi transaksi = data.baca<Transaksi>("t.json")
+  isi laporan = transaksi
+      .saring(.jumlah > 0)
+      .pilih(.negara, .jumlah)
+      .kelompok(.negara)
+      .agregat({
+          total: hitung()
+          pendapatan: jumlah(.jumlah)
+      })
+  laporan.tulis("hasil.json")`);
+});
+
+run("typechecker: '.pilih()' rejects a non-field-reference argument", () => {
+  assertThrows(() => tc('isi t = data.baca<X>("x.json")\nisi p = t.pilih(1)'), "'pilih()'");
+});
+
+run("typechecker: '.urutkan()' rejects an unknown sort direction", () => {
+  assertThrows(() => tc('isi t = data.baca<X>("x.json")\nisi p = t.urutkan(.a, entahlah)'), 'menaik');
+});
+
+run("typechecker: '.gabung()' without 'pada:' is rejected", () => {
+  assertThrows(() => tc('isi t = data.baca<X>("x.json")\nisi p = t.gabung(t)'), 'pada');
+});
+
+run("typechecker: '.agregat()' rejects a field that isn't hitung/jumlah/rata_rata/minimum/maksimum", () => {
+  assertThrows(() => tc('isi t = data.baca<X>("x.json")\nisi p = t.agregat({ total: .a })'), "agregat");
+});
+
+run("typechecker: .kumpulkan() widens data<T> back to T[]", () => {
+  const ast = parse(tokenize('struktur X { a: angka }\nisi t = data.baca<X>("x.json")\nisi n = t.kumpulkan()'));
+  typecheck(ast, 'id');
+  assertEqual(ast.body[2].value._type, 'X[]');
+});
+
+// -- codegen (shape only) --
+
+run('codegen: data.baca<T>(path) compiles to __gatra_data__.baca(path)', () => {
+  const js = compile('isi t = data.baca<X>("x.json")');
+  assert(js.includes('__gatra_data__.baca("x.json")'), js);
+});
+
+run('codegen: .saring(.a > 0) compiles to an implicit-record arrow function', () => {
+  const js = compile('isi t = data.baca<X>("x.json")\nisi s = t.saring(.a > 0)');
+  assert(/\.saring\(\(__r\d+\) => \(\(?__r\d+\.a > 0\)?\)/.test(js), js);
+});
+
+run('codegen: simple "field OP literal" .saring() also carries a native descriptor', () => {
+  const js = compile('isi t = data.baca<X>("x.json")\nisi s = t.saring(.a > 0)');
+  assert(js.includes(`field: "a", op: ">", value: 0`), js);
+});
+
+run('codegen: .pilih(.a, .b) compiles to structural field-name strings, no lambda', () => {
+  const js = compile('isi t = data.baca<X>("x.json")\nisi s = t.pilih(.a, .b)');
+  assert(js.includes('.pilih("a", "b")'), js);
+});
+
+run('codegen: .agregat({...}) compiles hitung()/jumlah(.f) into a plain descriptor object', () => {
+  const js = compile('isi t = data.baca<X>("x.json")\nisi s = t.kelompok(.a).agregat({ total: hitung(), jml: jumlah(.b) })');
+  assert(js.includes(`total: { fn: "hitung", field: null }`), js);
+  assert(js.includes(`jml: { fn: "jumlah", field: "b" }`), js);
+});
+
+run('codegen: 5.menit compiles to a plain millisecond number at compile time', () => {
+  const js = compile('isi ms = 5.menit');
+  assert(js.includes('let ms = 300000'), js);
+});
+
+run("codegen: data<T> + emitExports (gatra bangun/bundel) fails clearly at compile time instead of shipping a broken ES-module build", () => {
+  assertThrows(
+    () => compile('isi t = data.baca<X>("x.json")', { emitExports: true }),
+    "belum didukung untuk 'gatra bangun'"
+  );
+});
+
+run("codegen: data<T> in a 'paket' file also fails clearly (paket forces 'export' the same way emitExports does)", () => {
+  assertThrows(
+    () => compile('paket Contoh\nisi t = data.baca<X>("x.json")'),
+    "belum didukung untuk 'gatra bangun'"
+  );
+});
+
+run('codegen: dataset runtime prelude is only emitted when data.baca/data.alir is actually used', () => {
+  assert(!compile('isi x = 1').includes('__gatra_data__'));
+  assert(compile('isi t = data.baca<X>("x.json")').includes("require("));
+});
+
+// -- end-to-end execution (real files, real subprocess) --
+
+run('executes: canonical saring/pilih/kelompok/agregat pipeline produces the right totals', () => {
+  withDatasetFixture({ 'transaksi.json': TRANSAKSI_JSON }, (dir) => {
+    const out = execDataset(`
+      isi transaksi = data.baca<Transaksi>("transaksi.json")
+      isi laporan = transaksi
+          .saring(.jumlah > 0)
+          .pilih(.negara, .jumlah)
+          .kelompok(.negara)
+          .agregat({
+              total: hitung()
+              pendapatan: jumlah(.jumlah)
+              rata_rata: rata_rata(.jumlah)
+          })
+      cetak(laporan.kumpulkan())
+    `, dir);
+    // console.log's object formatting differs slightly between the native
+    // (Rust, alphabetical keys) and pure-JS (insertion-order keys) paths —
+    // check key:value substrings rather than reparsing the whole line.
+    assert(out.includes('negara: \'ID\''), out);
+    assert(out.includes('total: 1'), out);      // -20 filtered out by .saring(.jumlah > 0)
+    assert(out.includes('pendapatan: 100'), out);
+    assert(out.includes('negara: \'US\''), out);
+    assert(out.includes('total: 2'), out);
+    assert(out.includes('pendapatan: 350'), out);
+  });
+});
+
+run('executes: .tulis() writes a real JSON file to disk', () => {
+  withDatasetFixture({ 'transaksi.json': TRANSAKSI_JSON }, (dir) => {
+    execDataset(`
+      isi transaksi = data.baca<Transaksi>("transaksi.json")
+      transaksi.saring(.jumlah > 0).tulis("hasil.json")
+    `, dir);
+    const path = require('path');
+    const fs   = require('fs');
+    const written = JSON.parse(fs.readFileSync(path.join(dir, 'hasil.json'), 'utf8'));
+    assertEqual(written.length, 3);
+    assert(written.every(r => r.jumlah > 0));
+  });
+});
+
+run('executes: .gabung(other, pada: .a == .b) inner-joins on the merged-record condition', () => {
+  withDatasetFixture({ 'transaksi.json': TRANSAKSI_JSON, 'pengguna.json': PENGGUNA_JSON }, (dir) => {
+    const out = execDataset(`
+      isi transaksi = data.baca<Transaksi>("transaksi.json")
+      isi pengguna  = data.baca<Pengguna>("pengguna.json")
+      isi hasil = transaksi.gabung(pengguna, pada: .pengguna_id == .id)
+      cetak(hasil.kumpulkan().length)
+    `, dir);
+    assertEqual(out.trim(), '4'); // every transaksi row has a matching pengguna
+  });
+});
+
+run('executes: .urutkan(.field, menurun) sorts descending', () => {
+  withDatasetFixture({ 'transaksi.json': TRANSAKSI_JSON }, (dir) => {
+    const out = execDataset(`
+      isi transaksi = data.baca<Transaksi>("transaksi.json")
+      isi hasil = transaksi.urutkan(.jumlah, menurun).kumpulkan()
+      cetak(hasil[0].jumlah)
+      cetak(hasil[hasil.length - 1].jumlah)
+    `, dir);
+    const [first, last] = out.trim().split('\n');
+    assertEqual(first, '300');
+    assertEqual(last, '-20');
+  });
+});
+
+run('executes: .statistik() reports row count and per-column min/max', () => {
+  withDatasetFixture({ 'transaksi.json': TRANSAKSI_JSON }, (dir) => {
+    const out = execDataset(`
+      isi transaksi = data.baca<Transaksi>("transaksi.json")
+      isi s = transaksi.statistik()
+      cetak(s.baris)
+      cetak(s.kolom.jumlah.nilai_minimum)
+      cetak(s.kolom.jumlah.nilai_maksimum)
+    `, dir);
+    const [baris, min, max] = out.trim().split('\n');
+    assertEqual(baris, '4');
+    assertEqual(min, '-20');
+    assertEqual(max, '300');
+  });
+});
+
+run('executes: data.baca() with a glob pattern reads and concatenates multiple files', () => {
+  withDatasetFixture({
+    'a.transaksi.json': JSON.stringify([{ negara: 'ID', jumlah: 10 }]),
+    'b.transaksi.json': JSON.stringify([{ negara: 'US', jumlah: 20 }]),
+  }, (dir) => {
+    const out = execDataset(`
+      isi transaksi = data.baca<Transaksi>("*.transaksi.json")
+      cetak(transaksi.kumpulkan().length)
+    `, dir);
+    assertEqual(out.trim(), '2');
+  });
+});
+
+run('executes: data.baca() on an unreachable s3:// source throws a clear MVP-scope error, not a crash', () => {
+  withDatasetFixture({}, (dir) => {
+    const { spawnSync } = require('child_process');
+    const path = require('path');
+    const fs   = require('fs');
+    const js = compile(`
+      isi transaksi = data.baca<Transaksi>("s3://bucket/x.parquet")
+      cetak(transaksi.kumpulkan())
+    `);
+    const tmp = path.join(dir, 'x.js');
+    fs.writeFileSync(tmp, js, 'utf8');
+    const result = spawnSync(process.execPath, [tmp], { cwd: dir, encoding: 'utf8' });
+    assert(result.status !== 0);
+    assert(result.stderr.includes('belum didukung di MVP'), result.stderr);
+  });
+});
+
+run('executes: data.alir() (unbounded) refuses .kumpulkan() with a clear error instead of hanging/crashing', () => {
+  withDatasetFixture({}, (dir) => {
+    const { spawnSync } = require('child_process');
+    const path = require('path');
+    const fs   = require('fs');
+    const js = compile(`
+      isi kejadian = data.alir<Kejadian>("kafka://events")
+      cetak(kejadian.kumpulkan())
+    `);
+    const tmp = path.join(dir, 'x.js');
+    fs.writeFileSync(tmp, js, 'utf8');
+    const result = spawnSync(process.execPath, [tmp], { cwd: dir, encoding: 'utf8' });
+    assert(result.status !== 0);
+    assert(result.stderr.includes('tidak terbatas'), result.stderr);
+  });
+});
+
+// -- formatter --
+
+run('formatter: .field, named args, and data.baca<T> generic type arg round-trip', () => {
+  const src = 'isi transaksi = data.baca<Transaksi>("t.json")\nisi hasil = transaksi.saring(.jumlah > 0).gabung(transaksi, pada: .a == .b)';
+  const once = format(src);
+  assert(once.includes('data.baca<Transaksi>("t.json")'), once);
+  assert(once.includes('.saring(.jumlah > 0)'), once);
+  assert(once.includes('pada: .a == .b'), once);
+  assertEqual(once, format(once));
+});
+
+// -- native-engine (optional Rust addon; both paths must agree) --
+
+run('runtime: native-bridge.js never throws — resolves to the addon or null', () => {
+  delete require.cache[require.resolve('../src/runtime/native-bridge')];
+  const native = require('../src/runtime/native-bridge');
+  assert(native === null || typeof native.agregatNative === 'function');
+});
+
+run('runtime: dataset.js kelompok+agregat works standalone (via native addon when loaded, JS fallback otherwise)', () => {
+  const { Dataset } = require('../src/runtime/dataset');
+  const ds = new Dataset([{ negara: 'ID', jumlah: 100 }, { negara: 'ID', jumlah: 50 }, { negara: 'US', jumlah: 10 }]);
+  const out = ds.kelompok('negara').agregat({
+    total: { fn: 'hitung', field: null },
+    pendapatan: { fn: 'jumlah', field: 'jumlah' },
+  }).kumpulkan();
+  const id = out.find(r => r.negara === 'ID');
+  assertEqual(id.total, 2);
+  assertEqual(id.pendapatan, 150);
 });
 
 // ── Summary ───────────────────────────────────────────────────────────────────

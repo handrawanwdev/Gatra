@@ -42,7 +42,9 @@ class TypeChecker {
     this.symbols    = new SymbolTable();
     this.currentFn  = null; // { name, returnType } of the fn being checked
     this.typeAliases = {}; // name → canonical target type (from 'tipe' declarations)
+    this.methods = {}; // struct name → Map(method name → { params, returnType }), from receiver funcs
     this.withStack   = []; // active 'dengan'/'ubah' source vars — bare identifiers inside their fields resolve as member access, not a normal lookup
+    this.datasetCtx  = 0;  // >0 while checking args of a data<T> method (saring/pilih/ubah/...) — gates .field validity
     // Absolute path of the file being checked — needed to resolve relative
     // 'impor' sources for cross-module Go-style visibility checks. Without
     // it (e.g. checking an in-memory snippet), local imports fall back to
@@ -62,6 +64,14 @@ class TypeChecker {
     this.symbols.define('gagal', {
       kind: 'fn', name: 'gagal', params: [], returnType: 'unknown', variadic: true, builtin: true,
     });
+    // hitung()/jumlah(.f)/rata_rata(.f)/minimum(.f)/maksimum(.f) — aggregate
+    // markers valid only inside .agregat({...}); codegen turns each call into
+    // a plain descriptor, they're never invoked as real functions at runtime.
+    for (const name of ['hitung', 'jumlah', 'rata_rata', 'minimum', 'maksimum']) {
+      this.symbols.define(name, {
+        kind: 'fn', name, params: [], returnType: 'number', variadic: true, builtin: true,
+      });
+    }
   }
 
   // ── Public entry point ──────────────────────────────────────────────────────
@@ -86,7 +96,6 @@ class TypeChecker {
       case N.DESTRUCTURE_DECL:  return this.checkDestructureDecl(node);
       case N.FN_DECL:           return this.checkFnDecl(node);
       case N.STRUCT_DECL:    return this.checkStructDecl(node);
-      case N.CLASS_DECL:     return this.checkClassDecl(node);
       case N.IF_STMT:        return this.checkIfStmt(node);
       case N.LOOP_STMT:      return this.checkLoopStmt(node);
       case N.WHILE_STMT:     return this.checkWhileStmt(node);
@@ -252,12 +261,6 @@ class TypeChecker {
           line: node.line, col: node.col,
         });
         return;
-      case 'class':
-        this.symbols.define(name, {
-          kind: 'class', name, superclass: d.superclass, members: d.members,
-          line: node.line, col: node.col,
-        });
-        return;
       case 'type':
         this.typeAliases[name] = d.target;
         this.symbols.define(name, { kind: 'var', type: 'unknown', mutable: false, line: node.line, col: node.col });
@@ -313,11 +316,60 @@ class TypeChecker {
   }
 
   checkFnDecl(node) {
+    const returnType = node.returnType || 'void';
+
+    if (node.receiver) {
+      // Go-style receiver method: fungsi (h Hewan) sapa() { ... } — attached
+      // to struct 'Hewan', not a global name, so it lives in its own
+      // per-struct table instead of the symbol table (two structs may each
+      // freely have a method with the same name, like Go).
+      const structInfo = this.symbols.lookup(node.receiver.type);
+      if (!structInfo || structInfo.kind !== 'struct') {
+        throw this.err.unknownType(node.receiver.type, node.line, node.col);
+      }
+
+      const table = this.methods[node.receiver.type] || (this.methods[node.receiver.type] = new Map());
+      if (table.has(node.name)) {
+        throw this.err.duplicateVar(`${node.receiver.type}.${node.name}`, node.line, node.col);
+      }
+      table.set(node.name, { params: node.params, returnType });
+      this.checkDecorators(node.decorators);
+
+      const prevFn   = this.currentFn;
+      this.currentFn = { name: `${node.receiver.type}.${node.name}`, returnType, isAsync: node.isAsync || false };
+
+      this.symbols.push();
+      this.symbols.define(node.receiver.name, {
+        kind: 'var', type: node.receiver.type, mutable: false,
+        line: node.line, col: node.col,
+      });
+      for (const p of node.params) {
+        this.checkDecorators(p.decorators);
+        if (p.default) {
+          this.inferExpr(p.default);
+          this.checkNumericLiteralFits(p.type, p.default);
+        }
+        this.symbols.define(p.name, {
+          kind: 'var', type: p.type, mutable: false,
+          line: node.line, col: node.col,
+        });
+      }
+      for (const stmt of node.body.body) this.checkStmt(stmt);
+      this.symbols.pop();
+
+      this.currentFn = prevFn;
+      return;
+    }
+
     if (this.symbols.isUserDefinedInCurrent(node.name)) {
       throw this.err.duplicateVar(node.name, node.line, node.col);
     }
 
-    const returnType = node.returnType || 'void';
+    // Plain (non-receiver) functions never become a class member, so a
+    // decorator on one would have nothing to attach to at codegen time.
+    if (node.decorators && node.decorators.length > 0) {
+      throw this.err.decoratorNeedsReceiver(node.decorators[0].name, node.line, node.col);
+    }
 
     // Register before entering body to allow recursion
     this.symbols.define(node.name, {
@@ -331,6 +383,9 @@ class TypeChecker {
 
     this.symbols.push();
     for (const p of node.params) {
+      if (p.decorators && p.decorators.length > 0) {
+        throw this.err.decoratorNeedsReceiver(p.decorators[0].name, node.line, node.col);
+      }
       if (p.default) {
         this.inferExpr(p.default);
         this.checkNumericLiteralFits(p.type, p.default);
@@ -354,58 +409,18 @@ class TypeChecker {
       kind: 'struct', name: node.name, fields: node.fields,
       line: node.line, col: node.col,
     });
+    this.checkDecorators(node.decorators);
   }
 
-  checkClassDecl(node) {
-    if (this.symbols.existsInCurrent(node.name)) {
-      throw this.err.duplicateVar(node.name, node.line, node.col);
-    }
-
-    if (node.superclass) {
-      const superInfo = this.symbols.lookup(node.superclass);
-      if (!superInfo || superInfo.kind !== 'class') {
-        throw this.err.unknownType(node.superclass, node.line, node.col);
-      }
-    }
-
-    // Register before checking bodies so methods can reference the class
-    // itself (e.g. a 'statis' factory method returning a new instance).
-    this.symbols.define(node.name, {
-      kind: 'class', name: node.name, superclass: node.superclass,
-      members: node.members,
-      line: node.line, col: node.col,
-    });
-
-    const prevFn = this.currentFn;
-
-    for (const m of node.members) {
-      if (m.kind === 'field') {
-        if (m.default) this.inferExpr(m.default);
-        continue;
-      }
-
-      this.symbols.push();
-
-      let params = [];
-      if (m.kind === 'constructor' || m.kind === 'method') params = m.params;
-      else if (m.kind === 'setter') params = [{ name: m.paramName, type: m.paramType }];
-
-      for (const p of params) {
-        if (p.default) this.inferExpr(p.default);
-        this.symbols.define(p.name, {
-          kind: 'var', type: p.type, mutable: false, line: m.line, col: m.col,
-        });
-      }
-
-      this.currentFn = {
-        name: `${node.name}.${m.name || 'konstruk'}`,
-        returnType: m.returnType || 'void',
-        isAsync: m.isAsync || false,
-      };
-      for (const s of m.body.body) this.checkStmt(s);
-      this.currentFn = prevFn;
-
-      this.symbols.pop();
+  // @Nama(args) before a struktur/receiver-method/param — decorator identifier
+  // must resolve (usually via 'impor { Controller } dari "@nestjs/common"',
+  // untyped like any other external import) and its args type-check like any
+  // other call arguments. What it actually *does* is opaque to the checker,
+  // same laxness as other framework-facing member calls elsewhere here.
+  checkDecorators(decorators) {
+    for (const d of decorators || []) {
+      if (!this.symbols.lookup(d.name)) throw this.err.undefinedVar(d.name, d.line, d.col);
+      for (const a of d.args) this.inferExpr(a);
     }
   }
 
@@ -536,13 +551,13 @@ class TypeChecker {
       case N.AWAIT_EXPR:     return this.inferAwaitExpr(node);
       case N.FUNC_EXPR:      return this.inferFuncExpr(node);
       case N.NULL_LITERAL:   return 'null';
-      case N.THIS_EXPR:      return 'unknown';
-      case N.SUPER_EXPR:     return 'unknown';
       case N.OBJECT_LITERAL: return this.inferObjectLiteral(node);
       case N.OBJECT_TRANSFORM_EXPR: return this.inferObjectTransformExpr(node);
       case N.TEMPLATE_EXPR:  return this.inferTemplateExpr(node);
       case N.SPREAD_ELEMENT: this.inferExpr(node.value); return 'unknown';
       case N.TERNARY_EXPR:   return this.inferTernaryExpr(node);
+      case N.FIELD_EXPR:     return this.inferFieldExpr(node);
+      case N.NAMED_ARG:      return this.inferExpr(node.value);
       default:
         return 'unknown';
     }
@@ -660,6 +675,10 @@ class TypeChecker {
       if (node.callee.type === N.IDENTIFIER) {
         return this.inferNamedCall(node.callee.name, node.args, node);
       }
+      if (node.callee.type === N.MEMBER_EXPR) {
+        const ds = this.inferDatasetCall(node);
+        if (ds !== undefined) return ds;
+      }
       // Method calls on objects (Phase 4): skip type checking, but still
       // visit the callee (e.g. mat.internal(...)) so Go-style visibility on
       // namespace member access is enforced even in call position.
@@ -685,14 +704,6 @@ class TypeChecker {
     if (info.kind === 'package') {
       for (const a of args) this.inferExpr(a);
       return 'unknown';
-    }
-
-    // ClassName(args)  →  instantiation ('buat ClassName(args)' works too since
-    // 'buat' is a no-op prefix). Codegen emits 'new ClassName(args)'.
-    if (info.kind === 'class') {
-      for (const a of args) this.inferExpr(a);
-      node._isConstruct = true;
-      return info.name;
     }
 
     if (info.kind !== 'fn') throw this.err.notAFunction(name, node.line, node.col);
@@ -740,6 +751,154 @@ class TypeChecker {
     return info.returnType;
   }
 
+  // ── Big Data primitive: data<T> (BIGDATA_TYPE.md) ──────────────────────────
+
+  inferFieldExpr(node) {
+    if (this.datasetCtx === 0) throw this.err.fieldExprOutsideDataset(node.name, node.line, node.col);
+    return 'unknown';
+  }
+
+  isDatasetType(t) { return typeof t === 'string' && t.startsWith('data<'); }
+
+  // Field-reference-only argument, e.g. .pilih(.negara), .kelompok(.negara),
+  // .urutkan(.umur) — structural, never generically type-inferred (a bare
+  // .field is only meaningful as data, not as a value to evaluate here).
+  requireFieldRefArg(arg, methodName) {
+    if (!arg || arg.type !== N.FIELD_EXPR) throw this.err.expectedFieldReference(methodName, arg.line, arg.col);
+    return arg.name;
+  }
+
+  // Dispatches data<T> method calls (.saring/.pilih/.ubah/.kelompok/.agregat/
+  // .gabung/.urutkan/.bagi/.paralel/.terdistribusi/.jendela/.ambil/
+  // .kumpulkan/.tulis/.statistik) and the data.baca<T>()/data.alir<T>()
+  // sources. Returns undefined when node isn't a dataset call at all, so the
+  // caller falls back to the generic dynamic-dispatch path.
+  inferDatasetCall(node) {
+    const callee = node.callee; // MEMBER_EXPR
+    const member = callee.member;
+
+    // data.baca<T>(path) / data.alir<T>(path) — dataset source
+    if (callee.object.type === N.IDENTIFIER && callee.object.name === 'data' &&
+        (member === 'baca' || member === 'alir') && callee.typeArg) {
+      for (const a of node.args) this.inferExpr(a);
+      return `data<${callee.typeArg}>`;
+    }
+
+    const JOIN_VARIANTS = new Set(['dalam', 'kiri', 'kanan', 'penuh']);
+    // .gabung.dalam(...)/.kiri(...)/.kanan(...)/.penuh(...) — join type variant
+    if (JOIN_VARIANTS.has(member) && callee.object.type === N.MEMBER_EXPR && callee.object.member === 'gabung') {
+      const dsType = this.inferExpr(callee.object.object);
+      if (!this.isDatasetType(dsType)) return undefined;
+      this.checkGabungArgs(node.args);
+      return 'data<unknown>';
+    }
+
+    const DATASET_METHODS = new Set([
+      'saring', 'pilih', 'ubah', 'kelompok', 'agregat', 'gabung', 'urutkan',
+      'bagi', 'paralel', 'terdistribusi', 'jendela', 'ambil', 'kumpulkan', 'tulis', 'statistik',
+    ]);
+    if (!DATASET_METHODS.has(member)) return undefined;
+
+    const objType = this.inferExpr(callee.object);
+    if (!this.isDatasetType(objType)) return undefined;
+    const recordType = objType.slice(5, -1);
+
+    switch (member) {
+      case 'saring':
+      case 'ubah':
+        this.datasetCtx++;
+        try { for (const a of node.args) this.inferExpr(a); }
+        finally { this.datasetCtx--; }
+        return member === 'saring' ? objType : 'data<unknown>';
+
+      case 'pilih':
+      case 'kelompok':
+        for (const a of node.args) this.requireFieldRefArg(a, member);
+        return member === 'pilih' ? 'data<unknown>' : objType;
+
+      case 'agregat': {
+        const AGG_FN_NAMES = new Set(['hitung', 'jumlah', 'rata_rata', 'minimum', 'maksimum']);
+        const spec = node.args[0];
+        if (!spec || spec.type !== N.OBJECT_LITERAL) throw this.err.invalidAggregateSpec(node.line, node.col);
+        this.datasetCtx++;
+        try {
+          for (const f of spec.fields) {
+            const v = f.value;
+            const isAggCall = v.type === N.CALL_EXPR && typeof v.callee === 'object' &&
+              v.callee.type === N.IDENTIFIER && AGG_FN_NAMES.has(v.callee.name);
+            if (!isAggCall) throw this.err.invalidAggregateSpec(v.line, v.col);
+            this.inferExpr(v);
+          }
+        } finally { this.datasetCtx--; }
+        return 'data<unknown>';
+      }
+
+      case 'gabung':
+        this.checkGabungArgs(node.args);
+        return 'data<unknown>';
+
+      case 'urutkan': {
+        this.requireFieldRefArg(node.args[0], 'urutkan');
+        const dirArg = node.args[1];
+        if (dirArg) {
+          if (dirArg.type !== N.IDENTIFIER || (dirArg.name !== 'menaik' && dirArg.name !== 'menurun')) {
+            throw this.err.invalidSortDirection(dirArg.name ?? '?', dirArg.line, dirArg.col);
+          }
+        }
+        return objType;
+      }
+
+      case 'bagi':
+        if (node.args[0] && node.args[0].type === N.FIELD_EXPR) { /* field-based partition — structural */ }
+        else for (const a of node.args) this.inferExpr(a);
+        return objType;
+
+      case 'jendela':
+        this.datasetCtx++;
+        try { for (const a of node.args) this.inferExpr(a); }
+        finally { this.datasetCtx--; }
+        return objType;
+
+      case 'paralel':
+      case 'terdistribusi':
+      case 'ambil':
+        for (const a of node.args) this.inferExpr(a);
+        return objType;
+
+      case 'kumpulkan':
+        for (const a of node.args) this.inferExpr(a);
+        return recordType + '[]';
+
+      case 'tulis':
+        for (const a of node.args) this.inferExpr(a);
+        return 'void';
+
+      case 'statistik':
+        for (const a of node.args) this.inferExpr(a);
+        return 'unknown';
+
+      default:
+        return 'unknown';
+    }
+  }
+
+  // .gabung(other, pada: kondisi) — 'other' is a normal expression; 'pada's
+  // value is a field-reference condition evaluated over both sides (see
+  // codegen's genGabungArgs for how the two records are merged).
+  checkGabungArgs(args) {
+    const pada = args.find(a => a.type === N.NAMED_ARG && a.name === 'pada');
+    if (!pada) throw this.err.gabungNeedsPada(args[0]?.line, args[0]?.col);
+    for (const a of args) {
+      if (a === pada) {
+        this.datasetCtx++;
+        try { this.inferExpr(a.value); }
+        finally { this.datasetCtx--; }
+      } else {
+        this.inferExpr(a);
+      }
+    }
+  }
+
   inferMemberExpr(node) {
     const objType = this.inferExpr(node.object);
     if (objType === 'unknown') {
@@ -768,9 +927,14 @@ class TypeChecker {
     }
 
     const field = structInfo.fields.find(f => f.name === node.member);
-    if (!field) throw this.err.unknownField(objType, node.member, node.line, node.col);
+    if (field) return field.type;
 
-    return field.type;
+    // Not a field — could be a receiver method (h.sapa()); arg/return types
+    // aren't strictly checked at the call site (same laxness as other
+    // dynamic-dispatch member calls elsewhere in this checker).
+    if (this.methods[objType]?.has(node.member)) return 'unknown';
+
+    throw this.err.unknownField(objType, node.member, node.line, node.col);
   }
 
   inferIndexExpr(node) {

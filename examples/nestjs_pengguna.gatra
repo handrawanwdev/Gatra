@@ -1,0 +1,66 @@
+// nestjs_pengguna.gatra — controller/service NestJS pakai struktur + method
+// ber-receiver + decorator asli (@Controller/@Injectable/@Get/@Param).
+//
+// Perlu: npm install @nestjs/common reflect-metadata
+// (file ini menunjukkan bentuk kodenya — untuk benar-benar jalan lewat
+// NestJS perlu bootstrap main.ts standar Nest + dependency di atas terpasang;
+// 'gatra jalankan' di bawah tidak melewati langkah itu.)
+
+impor { Controller, Get, Injectable, Param } dari "@nestjs/common"
+
+struktur Pengguna {
+  id: teks
+  nama: teks
+}
+
+@Injectable()
+struktur PenggunaService {
+  daftar: Pengguna[]
+}
+
+fungsi (s PenggunaService) semua(): Pengguna[] {
+  balik s.daftar
+}
+
+fungsi (s PenggunaService) satu(id: teks): Pengguna? {
+  untuk p dalam s.daftar {
+    jika p.id == id {
+      balik p
+    }
+  }
+  balik kosong
+}
+
+@Controller("pengguna")
+struktur PenggunaController {
+  service: PenggunaService
+}
+
+@Get()
+fungsi (c PenggunaController) semua(): Pengguna[] {
+  balik c.service.semua()
+}
+
+@Get(":id")
+fungsi (c PenggunaController) satu(@Param("id") id: teks): Pengguna? {
+  balik c.service.satu(id)
+}
+
+// Struct-literal init masih dipakai apa adanya — @Injectable/@Controller cuma
+// mengubah constructor jadi positional di balik layar (buat DI container
+// NestJS motret 'new PenggunaController(service)'), penulisan di sini tidak
+// berubah sama sekali.
+fungsi utama(): tiada {
+  isi service = PenggunaService {
+    daftar: [
+      Pengguna { id: "1", nama: "Andi" },
+      Pengguna { id: "2", nama: "Budi" }
+    ]
+  }
+  isi controller = PenggunaController { service: service }
+
+  cetak(controller.semua())
+  cetak(controller.satu("2"))
+}
+
+utama()

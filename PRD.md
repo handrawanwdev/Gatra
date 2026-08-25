@@ -334,50 +334,52 @@ selama aktif {
 
 ---
 
-# 12. Class
+# 12. Method (Struct + Receiver Function)
 
-Class Gatra dipetakan langsung ke JavaScript Class.
+Gatra **tidak punya `class`**. Perilaku bertipe dipasang pada `struktur` lewat
+fungsi terpisah yang punya *receiver*, gaya Go — lebih sederhana daripada
+class: tanpa pewarisan, tanpa `ini`/keyword `this`, tanpa modifier
+`privat`/`statis`/getter-setter.
 
 ```gatra
-kelas Pengguna {
-
+struktur Pengguna {
     nama: teks
+}
 
-    konstruk(nama: teks) {
-        ini.nama = nama
-    }
-
-    sapa() {
-        cetak("Halo " + ini.nama)
-    }
+fungsi (p Pengguna) sapa(): tiada {
+    cetak("Halo " + p.nama)
 }
 ```
 
-Target:
+`p` di sini berperan seperti `this` — nama receiver bebas dipilih, sama
+seperti Go (`func (p *Pengguna) Sapa()`). Tidak ada konstruktor eksplisit;
+instansiasi langsung lewat struct literal (`Pengguna { nama: "Andi" }`,
+opsional diawali `buat`).
+
+Target compiler (di balik layar, agar tetap punya class asli untuk
+decorator/DI framework seperti NestJS — lihat bagian 36):
 
 ```javascript
 class Pengguna {
-  constructor(nama) {
-    this.nama = nama;
-  }
+  constructor(o) { Object.assign(this, o); }
 
   sapa() {
-    console.log("Halo " + this.nama);
+    const p = this;
+    console.log("Halo " + p.nama);
   }
 }
 ```
 
-Gatra harus mendukung:
+Sebuah `struktur` tanpa method sama sekali tetap dikompilasi sebagai objek
+data polos (tanpa class) — tidak ada overhead runtime untuk struct yang
+memang cuma data.
 
-- constructor
-- method
-- static
-- extends
-- super
-- getter
-- setter
-- private field
-- inheritance
+Gatra **tidak mendukung**:
+
+- pewarisan (`extends`/`super`) — komposisi lewat field struct biasa
+- `privat`/getter-setter — semua field struct terbuka; visibility hanya lewat
+  aturan Go (huruf awal BESAR = publik) di level modul
+- method statis — cukup fungsi biasa yang menerima/mengembalikan tipe struct
 
 ---
 
@@ -819,16 +821,27 @@ Tujuannya agar Gatra dapat menggunakan library npm yang sudah ada.
 
 # 36. Decorator
 
-Gatra mendukung decorator untuk framework JavaScript/TypeScript.
+Gatra mendukung decorator untuk framework JavaScript/TypeScript. Melekat pada
+`struktur` (yang dikompilasi ke class asli begitu ia punya method atau
+decorator — lihat bagian 12), pada method ber-receiver-nya, dan pada
+parameter method tersebut:
 
 ```gatra
-@Controller("/pengguna")
-kelas PenggunaController {
+impor { Controller, Get, Injectable, Param } dari "@nestjs/common"
 
-    @Get()
-    fungsi semua() {
-        ...
-    }
+@Injectable()
+struktur PenggunaService {
+    daftar: Pengguna[]
+}
+
+@Controller("pengguna")
+struktur PenggunaController {
+    service: PenggunaService
+}
+
+@Get(":id")
+fungsi (c PenggunaController) satu(@Param("id") id: teks): Pengguna? {
+    balik c.service.satu(id)
 }
 ```
 
@@ -840,6 +853,51 @@ TypeORM
 class-validator
 dependency injection
 ```
+
+## Strategi emisi
+
+NestJS bergantung pada `Reflect.getMetadata('design:paramtypes', ...)`, yang
+hanya ada karena `tsc --experimentalDecorators --emitDecoratorMetadata`
+menghasilkannya — dan pada decorator parameter (`@Body()`/`@Param()`/
+`@Query()`), yang sintaks `@decorator` native JS (stage-3) **tidak
+mendukung sama sekali** (proposalnya tidak mencakup parameter decorator).
+Karena itu Gatra meniru output `tsc` persis, bukan sintaks `@` native:
+
+```javascript
+let PenggunaController = class PenggunaController {
+    constructor(service) { this.service = service; }
+    satu(id) { ... }
+};
+__decorate([
+    Get(':id'),
+    __param(0, Param('id'))
+], PenggunaController.prototype, 'satu', null);
+PenggunaController = __decorate([
+    Controller('pengguna'),
+    __metadata('design:paramtypes', [PenggunaService])
+], PenggunaController);
+```
+
+Aturan:
+
+- `struktur` yang punya decorator level-kelas (`@Controller`/`@Injectable`)
+  otomatis pindah dari constructor `constructor(o) { Object.assign(this, o) }`
+  (opsional-object, ergonomis untuk literal struct biasa) ke constructor
+  **positional** `constructor(field1, field2, ...)` — itulah bentuk yang
+  dipanggil DI container NestJS (`new X(dep1, dep2)`). Literal struct
+  (`X { field: nilai }`) tetap dipakai sama seperti biasa; compiler yang
+  menyusun ulang urutannya di balik layar.
+- `design:paramtypes` dipetakan dari tipe field: `angka`/`bilangan`/
+  `pecahan`/`byte` → `Number`, `teks` → `String`, `logika` → `Boolean`,
+  `T[]` → `Array`, struct lain yang juga jadi class (punya method atau
+  decorator) → referensi class itu sendiri, selain itu → `Object`.
+- Perlu `impor "reflect-metadata"` di entry point (sama seperti proyek
+  NestJS asli) supaya `Reflect.metadata`/`Reflect.getMetadata` tersedia;
+  tanpa itu decorator tetap jalan (efek sampingnya tetap terpanggil), hanya
+  `design:paramtypes` yang tidak tersimpan.
+- Field struct dan `fungsi` biasa (non-receiver) **tidak** bisa didekorasi —
+  keduanya tidak jadi anggota class, jadi decorator tidak punya tempat
+  menempel; compiler menolaknya saat pemeriksaan tipe.
 
 ---
 
@@ -1297,7 +1355,7 @@ Tidak boleh ada runtime overhead besar hanya karena menggunakan Gatra.
 - [ ] Struct
 - [ ] Object
 - [ ] Array
-- [ ] Class
+- [ ] Method (receiver function)
 - [ ] Control flow
 - [ ] Module
 
@@ -1478,7 +1536,7 @@ Struct
        ↓
 Function
        ↓
-Class
+Method (receiver)
        ↓
 Result/Error
        ↓

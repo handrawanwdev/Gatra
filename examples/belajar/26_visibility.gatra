@@ -1,7 +1,7 @@
 // 26_visibility.gatra — Visibility identifier gaya Go
 //
 // Aturan:
-//   - Huruf awal BESAR pada nama fungsi/struktur/kelas/variabel level modul
+//   - Huruf awal BESAR pada nama fungsi/struktur/variabel level modul
 //     = publik/terekspor (bisa diimpor modul lain).
 //   - Huruf awal kecil = internal/tidak terekspor.
 //   - Tidak ada keyword public/private/export khusus — murni dari huruf awal.
