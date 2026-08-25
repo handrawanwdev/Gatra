@@ -1,5 +1,3 @@
-# 📘 PRODUCT REQUIREMENTS DOCUMENT (PRD)
-
 # GATRA v0.1
 
 ### **Bahasa Pemrograman Indonesia Sederhana untuk Ekosistem JavaScript**
@@ -36,7 +34,7 @@ Gatra **tidak membuat runtime, VM, garbage collector, package manager, atau ecos
 
 ---
 
-# 2. Tujuan Produk
+# 2. Tujuan
 
 Gatra bertujuan membuat pengembangan aplikasi Node.js:
 
