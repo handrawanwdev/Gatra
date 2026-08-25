@@ -1,11 +1,12 @@
 'use strict';
 
 class ParseError extends Error {
-  constructor(message, line, col) {
+  constructor(message, line, col, hint) {
     super(message);
     this.name = 'ParseError';
     this.line = line;
     this.col  = col;
+    this.hint = hint || null;
   }
 
   format() {

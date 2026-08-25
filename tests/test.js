@@ -215,11 +215,11 @@ run('parses member access', () => {
 });
 
 run('throws on missing variable name', () => {
-  assertThrows(() => parse(tokenize('isi : angka = 10')), 'Expected variable name');
+  assertThrows(() => parse(tokenize('isi : angka = 10')), 'Diharapkan nama variabel');
 });
 
 run('throws on unexpected token', () => {
-  assertThrows(() => parse(tokenize('isi x = @')), 'Unexpected');
+  assertThrows(() => parse(tokenize('isi x = @')), 'tidak dikenali');
 });
 
 // ── CodeGen / Integration Tests ───────────────────────────────────────────────

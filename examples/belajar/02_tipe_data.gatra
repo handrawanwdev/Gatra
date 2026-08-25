@@ -14,6 +14,7 @@ cetak(t3)
 cetak(t4)
 cetak(t5)
 cetak(t6)
+cetak(t2)
 
 // 'apa_saja' — escape hatch tanpa pemeriksaan tipe (dipakai untuk data dari luar)
 isi bebas: apa_saja = "boleh apa saja"

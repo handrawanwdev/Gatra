@@ -61,8 +61,8 @@ fungsi asinkron utama(): tiada {
   // jumlahkan(...)' polos, persis kayak manggil fungsi asinkron biasa.
   isi i = 0
   selama i < 4 {
-    isi hasil = tunggu jumlahkan(20000000)
-    cetak(f"jumlahkan(20000000) run {i} = {hasil}")
+    isi hasil = tunggu jumlahkan(2000000000)
+    cetak(f"jumlahkan(2000000000) run {i} = {hasil}")
     i = i + 1
   }
 

@@ -4,6 +4,24 @@ const { TokenType: T } = require('../lexer/tokens');
 const { NodeType: N }  = require('../ast/nodes');
 const { ParseError }   = require('./errors');
 
+// Generic beginner-friendly tip attached whenever consume() fails on one of
+// these punctuation tokens — covers the mistakes new Gatra programmers make
+// most often (a forgotten '}', a missing ':' before a type, ...), regardless
+// of which specific call site tripped it.
+const PUNCT_HINTS = {
+  [T.COLON]:    'Tipe di Gatra ditulis setelah titik dua, contoh: `nama: teks` atau `isi umur: angka = 17`.',
+  [T.LBRACE]:   'Kayaknya ada blok `{ ... }` yang belum dibuka di sini.',
+  [T.RBRACE]:   'Kayaknya ada `{` di atas yang belum ditutup dengan `}` yang cocok — hitung ulang pasangan kurung kurawalnya.',
+  [T.LPAREN]:   'Kayaknya ada `(` yang belum dibuka di sini.',
+  [T.RPAREN]:   'Kayaknya ada `(` di atas yang belum ditutup dengan `)` yang cocok.',
+  [T.LBRACKET]: 'Kayaknya ada `[` yang belum dibuka di sini.',
+  [T.RBRACKET]: 'Kayaknya ada `[` di atas yang belum ditutup dengan `]` yang cocok.',
+  [T.EQUALS]:   'Variabel di Gatra butuh nilai awal setelah `=`, contoh: `isi x = 5`.',
+  [T.COMMA]:    'Kayaknya ada `,` yang kelewatan di antara dua item di sini.',
+  [T.ARROW]:    'Kayaknya maksudnya `->` (dua karakter: minus lalu lebih-dari).',
+  [T.FAT_ARROW]:'Kayaknya maksudnya `=>` (dua karakter: sama-dengan lalu lebih-dari).',
+};
+
 class Parser {
   constructor(tokens) {
     this.tokens        = tokens;
@@ -40,8 +58,9 @@ class Parser {
     const tok = this.peek();
     const got = tok.value !== null ? `'${tok.value}'` : tok.type;
     throw new ParseError(
-      message || `Expected ${value !== undefined ? `'${value}'` : type}, got ${got}`,
-      tok.line, tok.col
+      message || `Diharapkan ${value !== undefined ? `\`${value}\`` : type}, ditemukan ${got}`,
+      tok.line, tok.col,
+      PUNCT_HINTS[type]
     );
   }
 
@@ -54,26 +73,27 @@ class Parser {
     else {
       const tok = this.peek();
       throw new ParseError(
-        message || `Expected type, got '${tok.value !== null ? tok.value : tok.type}'`,
-        tok.line, tok.col
+        message || `Diharapkan sebuah tipe, ditemukan \`${tok.value !== null ? tok.value : tok.type}\``,
+        tok.line, tok.col,
+        'Tipe bawaan Gatra: angka, teks, logika, tiada, dst. Kalau ini nama struct, cek lagi ejaannya atau pastikan sudah dideklarasikan/diimpor.'
       );
     }
 
     // larik<T>  →  desugar ke representasi array yang sama dengan T[]
     if (base === 'array') {
-      this.consume(T.LT, undefined, "Expected '<' after 'larik'");
-      const inner = this.consumeType('Expected type argument for larik<T>');
-      this.consume(T.GT, undefined, "Expected '>' after type argument of larik<T>");
+      this.consume(T.LT, undefined, "Diharapkan `<` setelah `larik`");
+      const inner = this.consumeType('Diharapkan argumen tipe untuk `larik<T>`');
+      this.consume(T.GT, undefined, "Diharapkan `>` setelah argumen tipe `larik<T>`");
       base = inner + '[]';
     }
 
     // peta<K, V>  →  peta bertipe (opsional, boleh juga 'peta' polos)
     if (base === 'map' && this.check(T.LT)) {
       this.advance(); // consume '<'
-      const key = this.consumeType('Expected key type for peta<K, V>');
-      this.consume(T.COMMA, undefined, "Expected ',' between key and value type in peta<K, V>");
-      const val = this.consumeType('Expected value type for peta<K, V>');
-      this.consume(T.GT, undefined, "Expected '>' after peta<K, V>");
+      const key = this.consumeType('Diharapkan tipe kunci untuk `peta<K, V>`');
+      this.consume(T.COMMA, undefined, "Diharapkan `,` di antara tipe kunci dan nilai pada `peta<K, V>`");
+      const val = this.consumeType('Diharapkan tipe nilai untuk `peta<K, V>`');
+      this.consume(T.GT, undefined, "Diharapkan `>` setelah `peta<K, V>`");
       base = `map<${key}, ${val}>`;
     }
 
@@ -82,17 +102,17 @@ class Parser {
     // supaya tetap bisa dipakai sebagai nama variabel biasa di posisi lain.
     if (base === 'hasil' && this.check(T.LT)) {
       this.advance(); // consume '<'
-      const ok  = this.consumeType('Expected ok type for hasil<T, E>');
-      this.consume(T.COMMA, undefined, "Expected ',' between types in hasil<T, E>");
-      const err = this.consumeType('Expected error type for hasil<T, E>');
-      this.consume(T.GT, undefined, "Expected '>' after hasil<T, E>");
+      const ok  = this.consumeType('Diharapkan tipe nilai-berhasil untuk `hasil<T, E>`');
+      this.consume(T.COMMA, undefined, "Diharapkan `,` di antara tipe pada `hasil<T, E>`");
+      const err = this.consumeType('Diharapkan tipe galat untuk `hasil<T, E>`');
+      this.consume(T.GT, undefined, "Diharapkan `>` setelah `hasil<T, E>`");
       base = `result<${ok}, ${err}>`;
     }
 
     // Consume [] suffixes for array types
     while (this.check(T.LBRACKET)) {
       this.advance(); // consume [
-      this.consume(T.RBRACKET, undefined, "Expected ']' after '['");
+      this.consume(T.RBRACKET, undefined, "Diharapkan `]` setelah `[`");
       base = base + '[]';
     }
 
@@ -123,12 +143,12 @@ class Parser {
     const decorators = [];
     while (this.check(T.AT)) {
       const atTok = this.advance();
-      const name  = this.consume(T.IDENTIFIER, undefined, "Expected decorator name after '@'").value;
+      const name  = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama dekorator setelah `@`").value;
       let args = [];
       if (this.check(T.LPAREN)) {
         this.advance();
         args = this.argList();
-        this.consume(T.RPAREN, undefined, "Expected ')' after decorator arguments");
+        this.consume(T.RPAREN, undefined, "Diharapkan `)` setelah argumen dekorator");
       }
       decorators.push({ name, args, line: atTok.line, col: atTok.col });
     }
@@ -143,7 +163,7 @@ class Parser {
       const next = this.peek();
       if (next.type === T.KEYWORD && next.value === 'struct') return this.structDecl(decorators);
       if (next.type === T.KEYWORD && next.value === 'fn')     return this.fnDecl(decorators);
-      throw new ParseError("'@' decorator must be followed by 'struktur' or 'fungsi'", next.line, next.col);
+      throw new ParseError("Dekorator `@` harus diikuti `struktur` atau `fungsi`", next.line, next.col);
     }
 
     if (tok.type === T.JS_BLOCK) {
@@ -208,14 +228,14 @@ class Parser {
     // Array destructuring: isi [first, second] = expr
     if (this.check(T.LBRACKET)) return this.destructureDecl(tok, mutable, 'array');
 
-    const name = this.consume(T.IDENTIFIER, undefined, "Expected variable name after 'isi'").value;
+    const name = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama variabel setelah `isi`").value;
 
     let varType = null;
     if (this.matchToken(T.COLON)) {
-      varType = this.consumeType("Expected type after ':'");
+      varType = this.consumeType("Diharapkan tipe setelah `:`");
     }
 
-    this.consume(T.EQUALS, undefined, "Expected '=' in variable declaration");
+    this.consume(T.EQUALS, undefined, "Diharapkan `=` pada deklarasi variabel — variabel butuh nilai awal, contoh: isi x = 5");
     const value = this.expression();
 
     return { type: N.VAR_DECL, name, varType, value, mutable, line: tok.line, col: tok.col };
@@ -223,32 +243,32 @@ class Parser {
 
   destructureDecl(tok, mutable, kind) {
     if (kind === 'object') {
-      this.consume(T.LBRACE, undefined, "Expected '{'");
+      this.consume(T.LBRACE, undefined, "Diharapkan `{`");
       const bindings = [];
       while (!this.check(T.RBRACE) && !this.isAtEnd()) {
-        const propTok = this.consume(T.IDENTIFIER, undefined, 'Expected property name').value;
+        const propTok = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama properti').value;
         let name = propTok, prop = propTok;
         if (this.matchToken(T.COLON)) {
-          name = this.consume(T.IDENTIFIER, undefined, 'Expected binding name').value;
+          name = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama variabel tujuan').value;
         }
         bindings.push({ prop, name });
         this.matchToken(T.COMMA);
       }
-      this.consume(T.RBRACE, undefined, "Expected '}'");
-      this.consume(T.EQUALS, undefined, "Expected '='");
+      this.consume(T.RBRACE, undefined, "Diharapkan `}`");
+      this.consume(T.EQUALS, undefined, "Diharapkan `=`");
       const value = this.expression();
       return { type: N.DESTRUCTURE_DECL, kind: 'object', bindings, value, mutable, line: tok.line, col: tok.col };
     }
     // array
-    this.consume(T.LBRACKET, undefined, "Expected '['");
+    this.consume(T.LBRACKET, undefined, "Diharapkan `[`");
     const bindings = [];
     while (!this.check(T.RBRACKET) && !this.isAtEnd()) {
-      const name = this.consume(T.IDENTIFIER, undefined, 'Expected binding name').value;
+      const name = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama variabel tujuan').value;
       bindings.push({ name });
       this.matchToken(T.COMMA);
     }
-    this.consume(T.RBRACKET, undefined, "Expected ']'");
-    this.consume(T.EQUALS, undefined, "Expected '='");
+    this.consume(T.RBRACKET, undefined, "Diharapkan `]`");
+    this.consume(T.EQUALS, undefined, "Diharapkan `=`");
     const value = this.expression();
     return { type: N.DESTRUCTURE_DECL, kind: 'array', bindings, value, mutable, line: tok.line, col: tok.col };
   }
@@ -273,21 +293,21 @@ class Parser {
     let receiver = null;
     if (this.check(T.LPAREN)) {
       this.advance();
-      const rName = this.consume(T.IDENTIFIER, undefined, 'Expected receiver name').value;
-      const rType = this.consume(T.IDENTIFIER, undefined, 'Expected receiver struct type').value;
-      this.consume(T.RPAREN, undefined, "Expected ')' after receiver");
+      const rName = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama receiver (mis. `h` pada `fungsi (h Hewan) ...`)').value;
+      const rType = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama tipe struct untuk receiver (mis. `Hewan` pada `fungsi (h Hewan) ...`)').value;
+      this.consume(T.RPAREN, undefined, "Diharapkan `)` setelah receiver");
       receiver = { name: rName, type: rType };
     }
 
-    const name = this.consume(T.IDENTIFIER, undefined, "Expected function name after 'fungsi'").value;
+    const name = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama fungsi setelah `fungsi`").value;
 
-    this.consume(T.LPAREN, undefined, "Expected '(' after function name");
+    this.consume(T.LPAREN, undefined, "Diharapkan `(` setelah nama fungsi");
     const params = this.paramList();
-    this.consume(T.RPAREN, undefined, "Expected ')' after parameters");
+    this.consume(T.RPAREN, undefined, "Diharapkan `)` setelah daftar parameter");
 
     let returnType = null;
     if (this.matchToken(T.COLON)) {
-      returnType = this.consumeType('Expected return type');
+      returnType = this.consumeType('Diharapkan tipe hasil (return type) setelah `:`');
     }
 
     const body = this.block();
@@ -307,13 +327,13 @@ class Parser {
       // Rest parameter: ...nama — harus jadi parameter terakhir
       if (this.check(T.ELLIPSIS)) {
         this.advance();
-        const name = this.consume(T.IDENTIFIER, undefined, "Expected parameter name after '...'").value;
+        const name = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama parameter setelah `...`").value;
         params.push({ name, type: 'unknown[]', default: null, rest: true, decorators: paramDecorators });
         break;
       }
-      const name = this.consume(T.IDENTIFIER, undefined, 'Expected parameter name').value;
-      this.consume(T.COLON, undefined, "Expected ':' after parameter name");
-      const paramType = this.consumeType('Expected parameter type');
+      const name = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama parameter').value;
+      this.consume(T.COLON, undefined, "Diharapkan `:` setelah nama parameter — tiap parameter butuh tipe, contoh: `nama: teks`");
+      const paramType = this.consumeType('Diharapkan tipe parameter setelah `:`');
       let defaultVal = null;
       if (this.matchToken(T.EQUALS)) {
         defaultVal = this.expression();
@@ -333,14 +353,14 @@ class Parser {
     do {
       if (this.check(T.ELLIPSIS)) {
         this.advance();
-        const name = this.consume(T.IDENTIFIER, undefined, "Expected parameter name after '...'").value;
+        const name = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama parameter setelah `...`").value;
         params.push({ name, type: 'unknown[]', default: null, rest: true });
         break;
       }
-      const name = this.consume(T.IDENTIFIER, undefined, 'Expected parameter name').value;
+      const name = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama parameter').value;
       let paramType = 'unknown';
       if (this.matchToken(T.COLON)) {
-        paramType = this.consumeType('Expected parameter type');
+        paramType = this.consumeType('Diharapkan tipe parameter setelah `:`');
       }
       let defaultVal = null;
       if (this.matchToken(T.EQUALS)) {
@@ -354,21 +374,21 @@ class Parser {
 
   structDecl(decorators = []) {
     const tok  = this.consume(T.KEYWORD, 'struct');
-    const name = this.consume(T.IDENTIFIER, undefined, 'Expected struct name').value;
+    const name = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama struktur setelah `struktur`').value;
 
-    this.consume(T.LBRACE, undefined, "Expected '{' after struct name");
+    this.consume(T.LBRACE, undefined, "Diharapkan `{` setelah nama struktur");
 
     const fields = [];
     while (!this.check(T.RBRACE) && !this.isAtEnd()) {
-      const fieldName = this.consume(T.IDENTIFIER, undefined, 'Expected field name').value;
-      this.consume(T.COLON, undefined, "Expected ':' after field name");
-      const fieldType = this.consumeType('Expected field type');
+      const fieldName = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama field').value;
+      this.consume(T.COLON, undefined, "Diharapkan `:` setelah nama field — tiap field butuh tipe, contoh: `nama: teks`");
+      const fieldType = this.consumeType('Diharapkan tipe field setelah `:`');
       fields.push({ name: fieldName, type: fieldType });
       // Optional comma between fields
       this.matchToken(T.COMMA);
     }
 
-    this.consume(T.RBRACE, undefined, "Expected '}' after struct fields");
+    this.consume(T.RBRACE, undefined, "Diharapkan `}` setelah daftar field struktur");
     return { type: N.STRUCT_DECL, name, fields, decorators, line: tok.line, col: tok.col };
   }
 
@@ -396,8 +416,8 @@ class Parser {
 
   forStmt() {
     const tok      = this.consume(T.KEYWORD, 'for');
-    const iterName = this.consume(T.IDENTIFIER, undefined, "Expected iterator name after 'untuk'").value;
-    this.consume(T.KEYWORD, 'in', "Expected 'dalam' after iterator name");
+    const iterName = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama variabel iterasi setelah `untuk`").value;
+    this.consume(T.KEYWORD, 'in', "Diharapkan `dalam` setelah nama variabel iterasi — bentuknya `untuk x dalam ...`");
 
     const prev = this.allowStructInit;
     this.allowStructInit = false;
@@ -451,22 +471,22 @@ class Parser {
 
   typeAliasDecl() {
     const tok  = this.consume(T.KEYWORD, 'type');
-    const name = this.consume(T.IDENTIFIER, undefined, "Expected type name after 'tipe'").value;
-    this.consume(T.EQUALS, undefined, "Expected '=' after type name");
-    const target = this.consumeType("Expected underlying type after '='");
+    const name = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama tipe setelah `tipe`").value;
+    this.consume(T.EQUALS, undefined, "Diharapkan `=` setelah nama tipe");
+    const target = this.consumeType("Diharapkan tipe dasar setelah `=`");
     return { type: N.TYPE_ALIAS_DECL, name, target, line: tok.line, col: tok.col };
   }
 
   testDecl() {
     const tok   = this.consume(T.KEYWORD, 'test');
-    const label = this.consume(T.STRING, undefined, "Expected string label after 'uji'").value;
+    const label = this.consume(T.STRING, undefined, "Diharapkan label teks setelah `uji`, contoh: uji \"nama tesnya\" { ... }").value;
     const body  = this.block();
     return { type: N.TEST_DECL, label, body, line: tok.line, col: tok.col };
   }
 
   measureStmt() {
     const tok   = this.consume(T.KEYWORD, 'measure');
-    const label = this.consume(T.STRING, undefined, "Expected string label after 'ukur'").value;
+    const label = this.consume(T.STRING, undefined, "Diharapkan label teks setelah `ukur`, contoh: ukur \"label\" { ... }").value;
     const body  = this.block();
     return { type: N.MEASURE_STMT, label, body, line: tok.line, col: tok.col };
   }
@@ -484,7 +504,7 @@ class Parser {
     const discriminant = this.expression();
     this.allowStructInit = prev;
 
-    this.consume(T.LBRACE, undefined, "Expected '{' after 'pilih'");
+    this.consume(T.LBRACE, undefined, "Diharapkan `{` setelah kondisi `pilih`");
 
     const cases = [];
     let defaultCase = null;
@@ -493,20 +513,20 @@ class Parser {
       if (this.check(T.KEYWORD, 'case')) {
         this.advance(); // consume 'kasus'
         const test = this.expression();
-        this.consume(T.ARROW, undefined, "Expected '->' after 'kasus'");
+        this.consume(T.ARROW, undefined, "Diharapkan `->` setelah `kasus`");
         const body = this.statement();
         cases.push({ test, body });
       } else if (this.check(T.KEYWORD, 'else')) {
         this.advance(); // consume 'lain'
-        this.consume(T.ARROW, undefined, "Expected '->' after 'lain'");
+        this.consume(T.ARROW, undefined, "Diharapkan `->` setelah `lain`");
         defaultCase = this.statement();
       } else {
         const t = this.peek();
-        throw new ParseError("Expected 'kasus' or 'lain' in 'pilih'", t.line, t.col);
+        throw new ParseError("Diharapkan `kasus` atau `lain` di dalam blok `pilih`", t.line, t.col);
       }
     }
 
-    this.consume(T.RBRACE, undefined, "Expected '}' after 'pilih'");
+    this.consume(T.RBRACE, undefined, "Diharapkan `}` setelah blok `pilih`");
     return { type: N.MATCH_STMT, discriminant, cases, defaultCase, line: tok.line, col: tok.col };
   }
 
@@ -519,20 +539,20 @@ class Parser {
     const discriminant = this.expression();
     this.allowStructInit = prev;
 
-    this.consume(T.LBRACE, undefined, "Expected '{' after 'cocok'");
+    this.consume(T.LBRACE, undefined, "Diharapkan `{` setelah `cocok`");
 
     let okArm = null;
     let errArm = null;
 
     while (!this.check(T.RBRACE) && !this.isAtEnd()) {
-      const patTok = this.consume(T.IDENTIFIER, undefined, "Expected 'berhasil' or 'gagal' pattern in 'cocok'");
+      const patTok = this.consume(T.IDENTIFIER, undefined, "Diharapkan pola `berhasil(...)` atau `gagal(...)` di dalam `cocok`");
       if (patTok.value !== 'berhasil' && patTok.value !== 'gagal') {
         throw new ParseError("'cocok' hanya menerima pola 'berhasil(...)' atau 'gagal(...)'", patTok.line, patTok.col);
       }
-      this.consume(T.LPAREN, undefined, `Expected '(' after '${patTok.value}'`);
-      const bindingTok = this.consume(T.IDENTIFIER, undefined, 'Expected binding name');
-      this.consume(T.RPAREN, undefined, "Expected ')'");
-      this.consume(T.FAT_ARROW, undefined, "Expected '=>'");
+      this.consume(T.LPAREN, undefined, `Diharapkan '(' setelah '${patTok.value}'`);
+      const bindingTok = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama variabel tujuan');
+      this.consume(T.RPAREN, undefined, "Diharapkan `)`");
+      this.consume(T.FAT_ARROW, undefined, "Diharapkan `=>`");
       const body = this.statement();
       const arm = { binding: bindingTok.value, body };
 
@@ -545,7 +565,7 @@ class Parser {
       }
     }
 
-    this.consume(T.RBRACE, undefined, "Expected '}' after 'cocok'");
+    this.consume(T.RBRACE, undefined, "Diharapkan `}` setelah blok `cocok`");
     if (!okArm && !errArm) {
       throw new ParseError("'cocok' membutuhkan minimal satu pola 'berhasil'/'gagal'", tok.line, tok.col);
     }
@@ -560,9 +580,9 @@ class Parser {
     let catchBlock = null;
     if (this.check(T.KEYWORD, 'catch')) {
       this.advance();
-      this.consume(T.LPAREN, undefined, "Expected '(' after 'tangkap'");
-      catchParam = this.consume(T.IDENTIFIER, undefined, 'Expected error parameter name').value;
-      this.consume(T.RPAREN, undefined, "Expected ')'");
+      this.consume(T.LPAREN, undefined, "Diharapkan `(` setelah `tangkap`");
+      catchParam = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama parameter galat, contoh: `tangkap (e) { ... }`').value;
+      this.consume(T.RPAREN, undefined, "Diharapkan `)`");
       catchBlock = this.block();
     }
 
@@ -584,13 +604,13 @@ class Parser {
     let isAsync = false;
     if (this.check(T.KEYWORD, 'async')) { this.advance(); isAsync = true; }
 
-    this.consume(T.LPAREN, undefined, "Expected '(' in function expression");
+    this.consume(T.LPAREN, undefined, "Diharapkan `(` pada ekspresi fungsi");
     const params = this.paramList();
-    this.consume(T.RPAREN, undefined, "Expected ')' after parameters");
+    this.consume(T.RPAREN, undefined, "Diharapkan `)` setelah daftar parameter");
 
     let returnType = null;
     if (this.matchToken(T.COLON)) {
-      returnType = this.consumeType('Expected return type');
+      returnType = this.consumeType('Diharapkan tipe hasil (return type) setelah `:`');
     }
 
     const body = this.block();
@@ -606,11 +626,11 @@ class Parser {
     const source = this.unary();
     this.allowStructInit = prevAllow;
 
-    this.consume(T.LBRACE, undefined, `Expected '{' after '${spread ? 'ubah' : 'dengan'}'`);
+    this.consume(T.LBRACE, undefined, `Diharapkan '{' setelah '${spread ? 'ubah' : 'dengan'}'`);
 
     const fields = [];
     while (!this.check(T.RBRACE) && !this.isAtEnd()) {
-      const nameTok = this.consume(T.IDENTIFIER, undefined, 'Expected field name');
+      const nameTok = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama field');
       let value;
       if (this.matchToken(T.EQUALS)) {
         value = this.expression();
@@ -622,7 +642,7 @@ class Parser {
       fields.push({ name: nameTok.value, value });
     }
 
-    this.consume(T.RBRACE, undefined, `Expected '}' after '${spread ? 'ubah' : 'dengan'}' block`);
+    this.consume(T.RBRACE, undefined, `Diharapkan '}' setelah blok '${spread ? 'ubah' : 'dengan'}'`);
     return { type: N.OBJECT_TRANSFORM_EXPR, source, fields, spread, line: tok.line, col: tok.col };
   }
 
@@ -638,16 +658,16 @@ class Parser {
 
   printStmt() {
     const tok = this.consume(T.KEYWORD, 'print');
-    this.consume(T.LPAREN, undefined, "Expected '(' after print");
+    this.consume(T.LPAREN, undefined, "Diharapkan `(` setelah `cetak`");
     const args = this.argList();
-    this.consume(T.RPAREN, undefined, "Expected ')'");
+    this.consume(T.RPAREN, undefined, "Diharapkan `)`");
     const callExpr = { type: N.CALL_EXPR, callee: '__print__', args, line: tok.line, col: tok.col };
     return { type: N.EXPR_STMT, expr: callExpr, line: tok.line, col: tok.col };
   }
 
   packageDecl() {
     const tok  = this.consume(T.KEYWORD, 'package');
-    const name = this.consume(T.IDENTIFIER, undefined, "Expected package name after 'paket'/'package'").value;
+    const name = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama paket setelah `paket`").value;
     return { type: N.PACKAGE_DECL, name, line: tok.line, col: tok.col };
   }
 
@@ -659,17 +679,17 @@ class Parser {
       this.advance();
       const names = [];
       do {
-        names.push(this.consume(T.IDENTIFIER, undefined, "Expected identifier in import list").value);
+        names.push(this.consume(T.IDENTIFIER, undefined, "Diharapkan nama identifier di dalam daftar impor `{ ... }`").value);
       } while (this.matchToken(T.COMMA));
-      this.consume(T.RBRACE, undefined, "Expected '}' after import list");
-      this.consume(T.KEYWORD, 'from', "Expected 'dari' after import list");
-      const source = this.consume(T.STRING, undefined, "Expected source string after 'dari'").value;
+      this.consume(T.RBRACE, undefined, "Diharapkan `}` setelah daftar impor");
+      this.consume(T.KEYWORD, 'from', "Diharapkan `dari` setelah daftar impor, contoh: impor { X } dari \"...\"");
+      const source = this.consume(T.STRING, undefined, "Diharapkan teks sumber (path/nama paket) setelah `dari`, mis. \"./berkas.gatra\"").value;
       return { type: N.PACKAGE_IMPORT, localName: null, names, source, line: tok.line, col: tok.col };
     }
 
-    const localName = this.consume(T.IDENTIFIER, undefined, "Expected import name after 'impor'").value;
-    this.consume(T.KEYWORD, 'from', "Expected 'dari' after import name");
-    const source    = this.consume(T.STRING, undefined, "Expected source string after 'dari'").value;
+    const localName = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama impor setelah `impor`").value;
+    this.consume(T.KEYWORD, 'from', "Diharapkan `dari` setelah nama impor, contoh: impor x dari \"...\"");
+    const source    = this.consume(T.STRING, undefined, "Diharapkan teks sumber (path/nama paket) setelah `dari`, mis. \"./berkas.gatra\"").value;
     return { type: N.PACKAGE_IMPORT, localName, names: null, source, line: tok.line, col: tok.col };
   }
 
@@ -679,12 +699,12 @@ class Parser {
   }
 
   block() {
-    this.consume(T.LBRACE, undefined, "Expected '{'");
+    this.consume(T.LBRACE, undefined, "Diharapkan `{`");
     const body = [];
     while (!this.check(T.RBRACE) && !this.isAtEnd()) {
       body.push(this.statement());
     }
-    this.consume(T.RBRACE, undefined, "Expected '}'");
+    this.consume(T.RBRACE, undefined, "Diharapkan `}`");
     return { type: N.BLOCK, body };
   }
 
@@ -701,7 +721,7 @@ class Parser {
       const tok = this.advance();
       const validTargets = [N.IDENTIFIER, N.MEMBER_EXPR, N.INDEX_EXPR];
       if (!validTargets.includes(left.type)) {
-        throw new ParseError('Invalid assignment target', tok.line, tok.col);
+        throw new ParseError('Target penugasan tidak valid — cuma variabel, field (`a.b`), atau elemen larik (`a[0]`) yang bisa diberi nilai baru', tok.line, tok.col);
       }
       const right = this.expression();
       return { type: N.ASSIGN_EXPR, target: left, value: right, line: tok.line, col: tok.col };
@@ -734,7 +754,7 @@ class Parser {
       const cond = this.nullishCoalescing();
       if (!this.check(T.KEYWORD, 'else')) {
         const t = this.peek();
-        throw new ParseError("Expected 'lain' after ternary condition", t.line, t.col);
+        throw new ParseError("Diharapkan `lain` setelah kondisi — bentuk singkatnya `nilai jika kondisi lain nilaiLain`", t.line, t.col);
       }
       this.advance(); // consume 'else' (lain)
       const alt = this.ternary(); // right-associative
@@ -830,8 +850,8 @@ class Parser {
       let timeoutMs = null;
       if (this.check(T.KEYWORD, 'timeout')) {
         this.advance();
-        const amount = this.consume(T.NUMBER, undefined, "Expected number after 'batas'");
-        this.consume(T.KEYWORD, 'second', "Expected 'detik' after timeout value");
+        const amount = this.consume(T.NUMBER, undefined, "Diharapkan angka setelah `batas`, contoh: `tunggu x batas 5 detik`");
+        this.consume(T.KEYWORD, 'second', "Diharapkan `detik` setelah nilai batas waktu");
         timeoutMs = amount.value * 1000;
       }
 
@@ -867,20 +887,20 @@ class Parser {
       if (this.check(T.LPAREN)) {
         const tok  = this.advance();
         const args = this.argList();
-        this.consume(T.RPAREN, undefined, "Expected ')'");
+        this.consume(T.RPAREN, undefined, "Diharapkan `)`");
         expr = { type: N.CALL_EXPR, callee: expr, args, line: tok.line, col: tok.col };
       } else if (this.check(T.DOT)) {
         const tok    = this.advance();
-        const member = this.consumeMemberName('Expected member name after .');
+        const member = this.consumeMemberName('Diharapkan nama field/method setelah `.`');
         expr = { type: N.MEMBER_EXPR, object: expr, member, optional: false, line: tok.line, col: tok.col };
       } else if (this.check(T.QDOT)) {
         const tok    = this.advance();
-        const member = this.consumeMemberName("Expected member name after '?.'");
+        const member = this.consumeMemberName("Diharapkan nama field/method setelah `?.`");
         expr = { type: N.MEMBER_EXPR, object: expr, member, optional: true, line: tok.line, col: tok.col };
       } else if (this.check(T.LBRACKET)) {
         const tok   = this.advance();
         const index = this.expression();
-        this.consume(T.RBRACKET, undefined, "Expected ']' after index expression");
+        this.consume(T.RBRACKET, undefined, "Diharapkan `]` setelah ekspresi indeks, contoh: `larik[0]`");
         expr = { type: N.INDEX_EXPR, object: expr, index, line: tok.line, col: tok.col };
       } else {
         break;
@@ -909,8 +929,8 @@ class Parser {
   arrowFnExpr() {
     const tok = this.consume(T.LPAREN);
     const params = this.paramListArrow();
-    this.consume(T.RPAREN, undefined, "Expected ')' after arrow function parameters");
-    this.consume(T.FAT_ARROW, undefined, "Expected '=>'");
+    this.consume(T.RPAREN, undefined, "Diharapkan `)` setelah daftar parameter fungsi panah (=>)");
+    this.consume(T.FAT_ARROW, undefined, "Diharapkan `=>`");
 
     if (this.check(T.LBRACE)) {
       const body = this.block();
@@ -950,7 +970,7 @@ class Parser {
           }
         } while (this.matchToken(T.COMMA));
       }
-      this.consume(T.RBRACKET, undefined, "Expected ']' after array elements");
+      this.consume(T.RBRACKET, undefined, "Diharapkan `]` setelah daftar elemen larik");
       return { type: N.ARRAY_LITERAL, elements, line: tok.line, col: tok.col };
     }
 
@@ -1014,13 +1034,13 @@ class Parser {
           this.advance();
           fields.push({ spread: true, value: this.expression() });
         } else {
-          const keyTok = this.consume(T.IDENTIFIER, undefined, 'Expected key name in object literal');
-          this.consume(T.COLON, undefined, "Expected ':' in object literal");
+          const keyTok = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama kunci pada objek literal');
+          this.consume(T.COLON, undefined, "Diharapkan `:` pada objek literal, contoh: `{ kunci: nilai }`");
           fields.push({ name: keyTok.value, value: this.expression() });
         }
         this.matchToken(T.COMMA);
       }
-      this.consume(T.RBRACE, undefined, "Expected '}' in object literal");
+      this.consume(T.RBRACE, undefined, "Diharapkan `}` setelah objek literal");
       return { type: N.OBJECT_LITERAL, fields, line: tok.line, col: tok.col };
     }
 
@@ -1028,29 +1048,29 @@ class Parser {
       if (this.isArrowFnAhead()) return this.arrowFnExpr();
       this.advance();
       const expr = this.expression();
-      this.consume(T.RPAREN, undefined, "Expected ')'");
+      this.consume(T.RPAREN, undefined, "Diharapkan `)`");
       return expr;
     }
 
     throw new ParseError(
-      `Unexpected token '${tok.value !== null ? tok.value : tok.type}'`,
+      `Token '${tok.value !== null ? tok.value : tok.type}' tidak dikenali di sini`,
       tok.line, tok.col
     );
   }
 
   structInit(nameTok) {
-    this.consume(T.LBRACE, undefined, "Expected '{'");
+    this.consume(T.LBRACE, undefined, "Diharapkan `{`");
     const fields = [];
 
     while (!this.check(T.RBRACE) && !this.isAtEnd()) {
-      const fieldName  = this.consume(T.IDENTIFIER, undefined, 'Expected field name').value;
-      this.consume(T.COLON, undefined, "Expected ':' in struct initializer");
+      const fieldName  = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama field').value;
+      this.consume(T.COLON, undefined, "Diharapkan `:` pada inisialisasi struktur, contoh: `Nama { field: nilai }`");
       const fieldValue = this.expression();
       fields.push({ name: fieldName, value: fieldValue });
       this.matchToken(T.COMMA);
     }
 
-    this.consume(T.RBRACE, undefined, "Expected '}' in struct initializer");
+    this.consume(T.RBRACE, undefined, "Diharapkan `}` setelah inisialisasi struktur");
     return { type: N.STRUCT_INIT, name: nameTok.value, fields, line: nameTok.line, col: nameTok.col };
   }
 
