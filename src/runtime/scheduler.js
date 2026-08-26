@@ -47,27 +47,34 @@ const THRESHOLD_MS   = 15;   // §4 example: ~2-4ms stays on the Event Loop, ~90
 const MIN_SAMPLES    = 2;    // don't escalate off a single cold-start sample
 const EMA_ALPHA      = 0.5;  // recent runs matter more, but one outlier can't flip the decision alone
 
-// fnName -> { count, avgMs } — process-wide, not per-module: Phase 0 keys
-// purely by function name (documented limitation — two same-named 'paralel'
-// fns in different files share one history bucket).
+// '${modulePath}::${fnName}' -> { count, avgMs }. Keying by function name
+// alone used to let two unrelated 'fungsi paralel' declarations that happen
+// to share a name — in different files — silently pollute each other's cost
+// history: a cheap function co-located (by name only) with an expensive one
+// could get escalated to the Worker Pool it never earned, or vice versa. The
+// module path is already threaded through every call site for pool lookup
+// (getPool() below) — reusing it here as part of the stats key costs
+// nothing and makes each 'paralel' function's history genuinely its own.
 const stats = new Map();
 
 function now() { return Number(process.hrtime.bigint() / 1000000n); }
 
-function getStats(fnName) {
-  let s = stats.get(fnName);
-  if (!s) { s = { count: 0, avgMs: 0 }; stats.set(fnName, s); }
+function statKey(modulePath, fnName) { return `${modulePath}::${fnName}`; }
+
+function getStats(key) {
+  let s = stats.get(key);
+  if (!s) { s = { count: 0, avgMs: 0 }; stats.set(key, s); }
   return s;
 }
 
-function recordDuration(fnName, ms) {
-  const s = getStats(fnName);
+function recordDuration(key, ms) {
+  const s = getStats(key);
   s.avgMs = s.count === 0 ? ms : (EMA_ALPHA * ms + (1 - EMA_ALPHA) * s.avgMs);
   s.count++;
 }
 
-function shouldUseWorker(fnName) {
-  const s = getStats(fnName);
+function shouldUseWorker(key) {
+  const s = getStats(key);
   return s.count >= MIN_SAMPLES && s.avgMs > THRESHOLD_MS;
 }
 
@@ -196,7 +203,8 @@ function dispatchToWorker(modulePath, fnName, args) {
 // inline path — never round-tripped through a worker unless the cost model
 // actually decided to.
 async function jalankan(fnName, localFn, modulePath, args) {
-  const useWorker = shouldUseWorker(fnName);
+  const key = statKey(modulePath, fnName);
+  const useWorker = shouldUseWorker(key);
   const t0 = now();
   let result;
   if (useWorker) {
@@ -212,7 +220,7 @@ async function jalankan(fnName, localFn, modulePath, args) {
   } else {
     result = await localFn(...args);
   }
-  recordDuration(fnName, now() - t0);
+  recordDuration(key, now() - t0);
   return result;
 }
 
@@ -221,5 +229,5 @@ module.exports = {
   // Exposed only for tests/test.js's crash-recovery regression test — the
   // pool/queue live below dispatchToWorker()'s per-call Promise and aren't
   // otherwise reachable from outside this module.
-  _internals: { getPool, dispatchToWorker, WorkerDispatchError },
+  _internals: { getPool, dispatchToWorker, WorkerDispatchError, getStats, statKey },
 };

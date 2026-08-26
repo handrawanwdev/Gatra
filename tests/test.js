@@ -111,7 +111,10 @@ run('type keywords map to internal canonical', () => {
 });
 
 run('tokenizes operators', () => {
-  const toks = tokenize('+ - * / == != >= <=');
+  // Numbers between operators (not a bare '+ - * / ...' soup) so '/' lands
+  // right after a NUMBER token and lexes as division, not a regex literal —
+  // see the 'Regex literal' test section for the '/' disambiguation itself.
+  const toks = tokenize('1 + 2 - 3 * 4 / 5 == 6 != 7 >= 8 <= 9');
   const vals = toks.filter(t => t.type !== TokenType.EOF).map(t => t.value);
   assert(vals.includes('=='));
   assert(vals.includes('!='));
@@ -630,7 +633,7 @@ run('typechecker: duplicate import name → error', () => {
 });
 
 run('typechecker: package.method() accepted (unknown return type)', () => {
-  tc('impor crypto dari "crypto"\nisi h = crypto.createHash("sha256")');
+  tc('impor crypto dari "crypto"\nisi h = crypto.CreateHash("sha256")');
 });
 
 // ── Code generation ────────────────────────────────────────────────────────
@@ -664,7 +667,7 @@ run('codegen: top-level var in paket NOT exported unless capitalized', () => {
 });
 
 run('codegen: imports emitted before functions', () => {
-  const js = compile('paket util\nimpor path dari "path"\nfungsi Resolve(): teks { balik path.join(".") }');
+  const js = compile('paket util\nimpor path dari "path"\nfungsi Resolve(): teks { balik path.Join(".") }');
   const importIdx = js.indexOf('import * as path');
   const exportIdx = js.indexOf('export function');
   assert(importIdx < exportIdx);
@@ -1538,6 +1541,17 @@ run('gatra buat scaffolds a runnable project', () => {
   }
 });
 
+run("gatra jalankan on a program with a local .gatra import + an npm/builtin import runs as real ESM without Node's MODULE_TYPELESS_PACKAGE_JSON warning", () => {
+  const { spawnSync } = require('child_process');
+  const path = require('path');
+  const cliPath = path.resolve(__dirname, '../src/cli/gatra.js');
+  const file    = path.resolve(__dirname, '../examples/belajar/26_visibility.gatra');
+  const result  = spawnSync(process.execPath, [cliPath, 'jalankan', file], { encoding: 'utf8' });
+  assertEqual(result.status, 0);
+  assert(!result.stderr.includes('MODULE_TYPELESS_PACKAGE_JSON'), result.stderr);
+  assert(!result.stderr.includes('Reparsing as ES module'), result.stderr);
+});
+
 // ── Validasi tipe numerik: bilangan (int) / pecahan (float) / byte ──────────
 
 console.log('\n── Validasi Tipe Numerik ───────────────────────────────────────');
@@ -1733,6 +1747,37 @@ run('executes: ?. short-circuits without throwing on a null/kosong intermediate'
   assertEqual(out[1], 'selesai');
 });
 
+// Prefix optional chain: '?a.b.c' — sugar for 'a?.b?.c' (every link optional,
+// no need to repeat '?.' at each level)
+run("parse: '?a.b.c' marks every member in the chain optional=true", () => {
+  const ast = parse(tokenize('isi v = ?a.b.c'));
+  const outer = ast.body[0].value;
+  assertEqual(outer.type, 'MemberExpr');
+  assertEqual(outer.optional, true);
+  assertEqual(outer.member, 'c');
+  assertEqual(outer.object.optional, true);
+  assertEqual(outer.object.member, 'b');
+});
+
+run("parse: bare '?nama' with nothing chained after it is rejected", () => {
+  assertThrows(
+    () => parse(tokenize('isi v = ?a')),
+    "'?' di awal ekspresi harus diikuti akses properti"
+  );
+});
+
+run("codegen: '?a.b' compiles the same as 'a?.b'", () => {
+  const withPrefix = compile('isi obj: apa_saja = kosong\ncetak(?obj.b)');
+  const withInfix  = compile('isi obj: apa_saja = kosong\ncetak(obj?.b)');
+  assertEqual(withPrefix, withInfix);
+});
+
+run("executes: '?profil.alamat.kota' short-circuits at the first missing link, same as 'profil?.alamat?.kota'", () => {
+  const out = exec('isi profil: apa_saja = { alamat: { kota: "Jakarta" } }\ncetak(?profil.alamat.kota)\ncetak(?profil.telepon.nomor)');
+  assertEqual(out[0], 'Jakarta');
+  assertEqual(out[1], '');
+});
+
 // Nullish coalescing ??
 
 run('parse: a ?? b produces BinaryExpr with op ??', () => {
@@ -1864,7 +1909,7 @@ run('executes: batas rejects with a Timeout error when the deadline passes first
   const { spawnSync } = require('child_process');
   const os   = require('os');
   const path = require('path');
-  const js = compile('impor tempo dari "node:timers/promises"\nfungsi asinkron lambat(): teks { tunggu tempo.setTimeout(3000)\nbalik "lambat" }\nfungsi asinkron utama(): tiada { coba { isi h = tunggu lambat() batas 1 detik\ncetak(h) } tangkap (e) { cetak("timeout:")\ncetak(e.message) } }\nutama()');
+  const js = compile('impor tempo dari "node:timers/promises"\nfungsi asinkron lambat(): teks { tunggu tempo.SetTimeout(3000)\nbalik "lambat" }\nfungsi asinkron utama(): tiada { coba { isi h = tunggu lambat() batas 1 detik\ncetak(h) } tangkap (e) { cetak("timeout:")\ncetak(e.message) } }\nutama()');
   const tmp = path.join(os.tmpdir(), `gatra_batas_timeout_${Date.now()}.js`);
   require('fs').writeFileSync(tmp, js, 'utf8');
   try {
@@ -1909,6 +1954,49 @@ run('parse: ubah requires a value — bare field name is rejected', () => {
 run('parse: isi ubah x (mutable var) still parses — no conflict with the new ubah expression', () => {
   const ast = parse(tokenize('isi ubah x = 5'));
   assertEqual(ast.body[0].mutable, true);
+});
+
+run('typechecker: reassigning a var declared without ubah is rejected', () => {
+  assertThrows(
+    () => tc('isi x = 5 x = 6'),
+    'tidak boleh diberi nilai baru'
+  );
+});
+
+run('typechecker: reassigning a var declared with ubah is fine', () => {
+  tc('isi ubah x = 5 x = 6');
+});
+
+run("parse: 'ubah nama = nilai' (mistaken reassignment syntax) gets a targeted hint instead of the generic '{' expected error", () => {
+  assertThrows(
+    () => parse(tokenize('isi ubah x = 1\nubah x = 2')),
+    "'ubah' bukan buat menandai reassignment"
+  );
+});
+
+run("parse: 'ubah' before a function parameter marks it mutable", () => {
+  const ast = parse(tokenize('fungsi f(ubah x: angka, y: angka) { }'));
+  assertEqual(ast.body[0].params[0].mutable, true);
+  assertEqual(ast.body[0].params[1].mutable, false);
+});
+
+run("typechecker: reassigning a function parameter without 'ubah' is rejected", () => {
+  assertThrows(
+    () => tc('fungsi f(x: angka): tiada { x = x + 1 }'),
+    'tidak boleh diberi nilai baru'
+  );
+});
+
+run("typechecker: reassigning a function parameter declared with 'ubah' is fine", () => {
+  tc('fungsi f(ubah x: angka): tiada { x = x + 1 }');
+});
+
+run("formatter: 'ubah' on a function parameter round-trips", () => {
+  const src = 'fungsi f(ubah x: angka, y: angka): tiada { x = x + 1 }';
+  const once = format(src);
+  assert(once.includes('ubah x: angka'), once);
+  assert(!once.includes('ubah y: angka'), once);
+  assertEqual(once, format(once));
 });
 
 run('typechecker: bare identifiers inside dengan/ubah fields do not need to be declared', () => {
@@ -2540,8 +2628,19 @@ run('typechecker: without a real filePath, local named imports fall back to lax/
   tc('impor { Apapun } dari "./tidak-ada-secara-nyata"');
 });
 
-run('typechecker: named import of an external (non-relative) package stays untyped/lax', () => {
-  tc('impor { readFileSync } dari "fs"\nreadFileSync("x")');
+run('typechecker: named import of an external (non-relative) package stays untyped/lax (member unresolved, no confident real-name check)', () => {
+  tc('impor { TidakDikenal } dari "fs"\nTidakDikenal("x")');
+});
+
+run("typechecker: PascalCase named import of a Node builtin ('ReadFileSync' from 'fs') is accepted", () => {
+  tc('impor { ReadFileSync } dari "fs"\nReadFileSync("x")');
+});
+
+run("typechecker: raw lowercase named import of a Node builtin ('readFileSync' from 'fs') is rejected", () => {
+  assertThrows(
+    () => tc('impor { readFileSync } dari "fs"\nreadFileSync("x")'),
+    '`readFileSync` bukan anggota public dari modul `fs`'
+  );
 });
 
 run('executes end-to-end: Tambah(10, 20) works, validasi(10) is rejected at compile time', () => {
@@ -2568,6 +2667,161 @@ run('executes end-to-end: Tambah(10, 20) works, validasi(10) is rejected at comp
   });
 });
 
+// Go-style visibility extended to Node.js builtins (builtin-interop.js):
+// 'os.platform()' is Node's real (untouched) camelCase API, but Gatra source
+// must access it as 'os.Platform()' — the PascalCase form is mapped back to
+// the real member name at compile time, purely in the codegen output.
+run("typechecker: PascalCase access on a Node builtin ('os.Platform') is accepted and maps onto the real member", () => {
+  tc('impor os dari "os"\ncetak(os.Platform())');
+});
+
+run("typechecker: raw lowercase access on a Node builtin ('os.platform') is rejected", () => {
+  assertThrows(
+    () => tc('impor os dari "os"\ncetak(os.platform())'),
+    '`platform` bukan anggota public dari modul `os`'
+  );
+});
+
+run("typechecker: the builtin rejection hints the correct PascalCase form", () => {
+  assertThrows(
+    () => tc('impor os dari "os"\ncetak(os.platform())'),
+    'Gunakan `os.Platform()`'
+  );
+});
+
+run("typechecker: an unrecognized PascalCase name on a Node builtin is left lax (no false positive)", () => {
+  tc('impor os dari "os"\ncetak(os.TidakAda())');
+});
+
+run("codegen: 'os.Platform()' compiles to a call against the real, untouched 'os.platform()'", () => {
+  const js = compile('impor os dari "os"\ncetak(os.Platform())');
+  assert(js.includes('os.platform()'), js);
+  assert(!js.includes('.Platform()'), js);
+});
+
+run("executes: 'os.Platform()' runs and returns Node's real platform string", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatra_builtin_vis_'));
+  const cliPath = path.resolve(__dirname, '../src/cli/gatra.js');
+  try {
+    const file = path.join(dir, 'main.gatra');
+    fs.writeFileSync(file, 'impor os dari "os"\ncetak(os.Platform())', 'utf8');
+    const result = spawnSync(process.execPath, [cliPath, 'jalankan', file], { encoding: 'utf8' });
+    assertEqual(result.status, 0, result.stderr);
+    assertEqual(result.stdout.trim(), os.platform());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+run("typechecker: a Node builtin accessed via 'node:' prefix ('node:os') enforces the same rule", () => {
+  assertThrows(
+    () => tc('impor os dari "node:os"\ncetak(os.platform())'),
+    '`platform` bukan anggota public dari modul `os`'
+  );
+  tc('impor os dari "node:os"\ncetak(os.Platform())');
+});
+
+// Same Go-style visibility for npm packages (external-interop.js) — the
+// architectural point being that a module's *source* (local .gatra, Node
+// builtin, or npm) never changes the rule. Compiler never require()s an
+// arbitrary npm package to find this out: it only resolves the real entry
+// file's path (require.resolve — no execution) and statically scans that
+// file's *text* for common export patterns. A package written plainly
+// enough for that scan to succeed gets the early compile-time check too; one
+// that isn't (exports built dynamically, e.g. in a loop) still works
+// correctly at runtime — the whole point of the always-on runtime adapter
+// (__gatra_pascal_proxy__/__gatra_resolve_named__) codegen emits regardless.
+function withFakeNpmPackage(files, testFn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gatra_npm_vis_'));
+  try {
+    for (const [pkgName, indexSrc] of Object.entries(files)) {
+      const pkgDir = path.join(dir, 'node_modules', pkgName);
+      fs.mkdirSync(pkgDir, { recursive: true });
+      fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ name: pkgName, version: '1.0.0', main: 'index.js' }), 'utf8');
+      fs.writeFileSync(path.join(pkgDir, 'index.js'), indexSrc, 'utf8');
+    }
+    testFn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const cliPath = path.resolve(__dirname, '../src/cli/gatra.js');
+
+function runGatraIn(dir, gatraSrc) {
+  const file = path.join(dir, 'main.gatra');
+  fs.writeFileSync(file, gatraSrc, 'utf8');
+  return spawnSync(process.execPath, [cliPath, 'jalankan', file], { cwd: dir, encoding: 'utf8' });
+}
+
+run("executes: npm package with statically-scannable exports ('module.exports = { map, filter }') — 'lib.Map()' works", () => {
+  withFakeNpmPackage({ 'fake-lib': 'function map(a,f){return a.map(f)}\nfunction filter(a,f){return a.filter(f)}\nmodule.exports = { map, filter };' }, (dir) => {
+    const r = runGatraIn(dir, 'impor lib dari "fake-lib"\ncetak(lib.Map([1,2,3], fungsi(x: angka): angka { balik x * 2 }))');
+    assertEqual(r.status, 0, r.stderr);
+    assertEqual(r.stdout.trim(), '[ 2, 4, 6 ]');
+  });
+});
+
+run("typechecker/CLI: npm package with statically-scannable exports rejects raw lowercase access at COMPILE time", () => {
+  withFakeNpmPackage({ 'fake-lib': 'module.exports = { map: function(a,f){return a.map(f)} };' }, (dir) => {
+    const r = runGatraIn(dir, 'impor lib dari "fake-lib"\ncetak(lib.map([1], fungsi(x: angka): angka { balik x }))');
+    assert(r.status !== 0);
+    assert(r.stderr.includes('GALAT AKSES'), r.stderr);
+    assert(r.stderr.includes('`map` bukan anggota public dari modul `lib`'), r.stderr);
+    assert(r.stderr.includes('Gunakan `lib.Map()`'), r.stderr);
+  });
+});
+
+run("executes: npm named import ('impor { Map } dari \"fake-lib\"') maps onto the real lowercase export", () => {
+  withFakeNpmPackage({ 'fake-lib': 'module.exports = { map: function(a,f){return a.map(f)} };' }, (dir) => {
+    const r = runGatraIn(dir, 'impor { Map } dari "fake-lib"\ncetak(Map([1,2], fungsi(x: angka): angka { balik x + 1 }))');
+    assertEqual(r.status, 0, r.stderr);
+    assertEqual(r.stdout.trim(), '[ 2, 3 ]');
+  });
+});
+
+run("typechecker/CLI: npm named import using the raw lowercase export name is rejected at COMPILE time", () => {
+  withFakeNpmPackage({ 'fake-lib': 'module.exports = { map: function(a,f){return a.map(f)} };' }, (dir) => {
+    const r = runGatraIn(dir, 'impor { map } dari "fake-lib"\ncetak(map([1], fungsi(x: angka): angka { balik x }))');
+    assert(r.status !== 0);
+    assert(r.stderr.includes('`map` bukan anggota public dari modul `fake-lib`'), r.stderr);
+  });
+});
+
+run("executes: npm package whose exports are built dynamically (unscannable statically) still resolves correctly through the runtime adapter", () => {
+  withFakeNpmPackage({
+    'opaque-lib': "var impl = {};\n['double','triple'].forEach(function(k,i){ impl[k] = function(x){ return x*(i+2); }; });\nmodule.exports = impl;",
+  }, (dir) => {
+    const r = runGatraIn(dir, 'impor lib dari "opaque-lib"\ncetak(lib.Double(5))\ncetak(lib.Triple(5))');
+    assertEqual(r.status, 0, r.stderr);
+    assertEqual(r.stdout.trim(), '10\n15');
+  });
+});
+
+run("executes: raw lowercase access on a statically-unscannable npm package is still rejected — deferred to a RUNTIME check, not a compile error", () => {
+  withFakeNpmPackage({
+    'opaque-lib': "var impl = {};\n['double'].forEach(function(k,i){ impl[k] = function(x){ return x*2; }; });\nmodule.exports = impl;",
+  }, (dir) => {
+    const r = runGatraIn(dir, 'impor lib dari "opaque-lib"\ncetak(lib.double(5))');
+    assert(r.status !== 0);
+    // Not a GALAT AKSES compile error (the export list wasn't statically
+    // known) — a real thrown Error from __gatra_pascal_proxy__ at runtime,
+    // same visibility rule, same message, enforced later.
+    assert(!r.stderr.includes('GALAT AKSES'), r.stderr);
+    assert(r.stderr.includes('`double` bukan anggota public dari modul'), r.stderr);
+  });
+});
+
+run("executes: npm named import from a statically-unscannable package also resolves through the runtime adapter", () => {
+  withFakeNpmPackage({
+    'opaque-lib': "var impl = {};\n['double'].forEach(function(k,i){ impl[k] = function(x){ return x*2; }; });\nmodule.exports = impl;",
+  }, (dir) => {
+    const r = runGatraIn(dir, 'impor { Double } dari "opaque-lib"\ncetak(Double(9))');
+    assertEqual(r.status, 0, r.stderr);
+    assertEqual(r.stdout.trim(), '18');
+  });
+});
+
 // ── fungsi paralel: Automatic Concurrency (Automatic_Concurrency.md) ───────────
 // Phase 0 only: bounded worker pool + adaptive cost-based dispatch. No
 // ownership/move-checking and no matching-engine single-owner model yet.
@@ -2589,7 +2843,7 @@ run("parse: 'fungsi paralel (h X) nama()' still parses (rejected later, at typec
 run("typechecker: 'tunggu' is legal inside a 'paralel' fn body without also needing 'asinkron'", () => {
   tc(`impor tempo dari "node:timers/promises"
   fungsi paralel proses(x: angka): angka {
-    tunggu tempo.setTimeout(1)
+    tunggu tempo.SetTimeout(1)
     balik x
   }`);
 });
@@ -2770,6 +3024,32 @@ run('typechecker: two independent variables never cross-contaminate move trackin
   }`);
 });
 
+run("typechecker: a direct alias ('isi b = data') of an already-passed variable is also caught by usedAfterMove", () => {
+  assertThrows(
+    () => tc(`struktur Data { nilai: angka }
+    fungsi paralel proses(d: Data): angka { balik d.nilai }
+    fungsi asinkron utama(): tiada {
+      isi data = Data { nilai: 5 }
+      isi b = data
+      tunggu proses(data)
+      tunggu proses(b)
+    }`),
+    'sudah dipindah'
+  );
+});
+
+run("typechecker: an alias created BEFORE the move is fine to keep using once the alias itself is reassigned fresh", () => {
+  tc(`struktur Data { nilai: angka }
+  fungsi paralel proses(d: Data): angka { balik d.nilai }
+  fungsi asinkron utama(): tiada {
+    isi data = Data { nilai: 5 }
+    isi ubah b = data
+    tunggu proses(data)
+    b = Data { nilai: 10 }
+    tunggu proses(b)
+  }`);
+});
+
 run("typechecker: closure capture — a 'paralel' fn body referencing an outer top-level var is rejected", () => {
   assertThrows(
     () => tc('isi angka1 = 5\nfungsi paralel proses(x: angka): angka {\n  balik x + angka1\n}'),
@@ -2929,7 +3209,7 @@ run('graph: renderMermaid emits one edge per import', () => {
 
 // ── CLI: explain (function classification) ──────────────────────────────────
 
-const { analyzeFile } = require('../src/cli/explain');
+const { analyzeFile, analyzeFileDependencies } = require('../src/cli/explain');
 
 run('explain: a plain sync function is classified CPU-bound and parallelizable', () => {
   const [fn] = analyzeFile('fungsi hitung(x: angka): angka { balik x * 2 }');
@@ -2959,6 +3239,72 @@ run("explain: a 'fungsi paralel' is classified parallelizable with the Worker Po
   assertEqual(fn.isParallel, true);
   assertEqual(fn.parallelizable, true);
   assertEqual(fn.strategy, 'Worker Pool (paralel)');
+});
+
+console.log("\n── Dependency Graph ('fungsi paralel' call sites) ────────────────");
+
+run('dependency-graph: two calls sharing no identifier at all are independent (no edge)', () => {
+  const [g] = analyzeFileDependencies(`
+    fungsi paralel proses(x: angka): angka { balik x }
+    fungsi asinkron utama(): tiada {
+      isi a = 1
+      isi b = 2
+      tunggu proses(a)
+      tunggu proses(b)
+    }`);
+  assertEqual(g.calls.length, 2);
+  assertEqual(g.edges.length, 0);
+});
+
+run("dependency-graph: 'x = tunggu proses(x)' then a later call reading x is a RAW edge", () => {
+  const [g] = analyzeFileDependencies(`
+    fungsi paralel proses(x: angka): angka { balik x }
+    fungsi asinkron utama(): tiada {
+      isi ubah x = 1
+      x = tunggu proses(x)
+      x = tunggu proses(x)
+    }`);
+  assertEqual(g.calls[0].writes, 'x');
+  assertEqual(g.calls[1].writes, 'x');
+  assertEqual(g.edges.length, 1);
+  assertEqual(g.edges[0].from, 0);
+  assertEqual(g.edges[0].to, 1);
+  assertEqual(g.edges[0].reason, 'raw');
+  assertEqual(g.edges[0].via, 'x');
+});
+
+run('dependency-graph: an aliased variable (isi b = data) still resolves to the same shared-access edge', () => {
+  const [g] = analyzeFileDependencies(`
+    fungsi paralel proses(x: angka): angka { balik x }
+    fungsi asinkron utama(): tiada {
+      isi data = 5
+      isi b = data
+      tunggu proses(data)
+      tunggu proses(b)
+    }`);
+  assertEqual(g.edges.length, 1);
+  assertEqual(g.edges[0].reason, 'shared');
+  assertEqual(g.edges[0].via, 'data');
+});
+
+run('dependency-graph: top-level scope and each function body get independent graphs', () => {
+  const graphs = analyzeFileDependencies(`
+    fungsi paralel proses(x: angka): angka { balik x }
+    fungsi asinkron sisi(): tiada {
+      isi y = 1
+      tunggu proses(y)
+    }
+    isi z = 1
+    tunggu proses(z)
+  `);
+  const scopeNames = graphs.map(g => g.scope).sort((a, b) => String(a).localeCompare(String(b)));
+  assertEqual(scopeNames.length, 2);
+  assert(scopeNames.includes('sisi'));
+  assert(scopeNames.includes(null));
+});
+
+run('dependency-graph: no fungsi paralel in the file returns an empty result', () => {
+  assertEqual(analyzeFileDependencies('fungsi biasa(x: angka): angka { balik x }').length, 0);
 });
 
 console.log('\n── Konversi tipe (ke_teks/ke_angka/dst) ─────────────────────────');
@@ -3115,6 +3461,24 @@ function runAsync(label, fn) {
   );
 }
 
+runAsync("scheduler: cost-history is keyed per (module, function) — two same-named 'paralel' fns in different files get independent stats buckets", async () => {
+  delete require.cache[require.resolve('../src/runtime/scheduler')];
+  const scheduler = require('../src/runtime/scheduler');
+  const { getStats, statKey } = scheduler._internals;
+  const fnName = 'sama_sama';
+  const modA = '/tmp/gatra_stat_test_a.js';
+  const modB = '/tmp/gatra_stat_test_b.js';
+
+  await scheduler.jalankan(fnName, () => Promise.resolve(1), modA, []);
+  await scheduler.jalankan(fnName, () => Promise.resolve(2), modA, []);
+
+  const keyA = statKey(modA, fnName);
+  const keyB = statKey(modB, fnName);
+  assert(keyA !== keyB, 'stat keys for different modules must differ even with the same function name');
+  assertEqual(getStats(keyA).count, 2);
+  assertEqual(getStats(keyB).count, 0); // module B never called — must not inherit module A's history
+});
+
 runAsync("scheduler: a worker crash while a task is queued behind it no longer strands that task forever (UC-11)", async () => {
   const realCpus = os.cpus;
   os.cpus = () => [{}]; // force MAX_WORKERS = 1
@@ -3180,6 +3544,71 @@ runAsync("scheduler: a worker crash while a task is queued behind it no longer s
     fs.rmSync(dir, { recursive: true, force: true });
     delete require.cache[require.resolve('../src/runtime/scheduler')];
   }
+});
+
+console.log('\n── Regex literal (/pola/flag) ───────────────────────────────────');
+
+run('parse: /pola/ produces a RegexLiteral with empty flags', () => {
+  const ast = parse(tokenize('isi p = /abc/'));
+  assertEqual(ast.body[0].value.type, 'RegexLiteral');
+  assertEqual(ast.body[0].value.pattern, 'abc');
+  assertEqual(ast.body[0].value.flags, '');
+});
+
+run('parse: /pola/flag captures trailing flag letters', () => {
+  const ast = parse(tokenize('isi p = /abc/gi'));
+  assertEqual(ast.body[0].value.pattern, 'abc');
+  assertEqual(ast.body[0].value.flags, 'gi');
+});
+
+run('parse: an escaped slash inside the pattern does not end the literal early', () => {
+  const ast = parse(tokenize('isi p = /a\\/b/'));
+  assertEqual(ast.body[0].value.pattern, 'a\\/b');
+});
+
+run("parse: an unescaped '/' inside a character class doesn't end the literal early", () => {
+  const ast = parse(tokenize('isi p = /[/]/'));
+  assertEqual(ast.body[0].value.pattern, '[/]');
+});
+
+run('parse: an unterminated regex literal is a clear LexError', () => {
+  assertThrows(() => tokenize('isi p = /abc'), "Unterminated regex literal");
+});
+
+run("lexer: '/' after a value-ending token (identifier, number, ')', ']') is division, not a regex literal", () => {
+  assertEqual(parse(tokenize('isi x = 10\nisi y = x / 2')).body[1].value.type, 'BinaryExpr');
+  assertEqual(parse(tokenize('isi y = 10 / 2')).body[0].value.type, 'BinaryExpr');
+  assertEqual(parse(tokenize('isi y = (10) / 2')).body[0].value.type, 'BinaryExpr');
+  assertEqual(parse(tokenize('isi arr = [1]\nisi y = arr[0] / 2')).body[1].value.type, 'BinaryExpr');
+});
+
+run("lexer: '/' at the start of an expression (after '=', '(', 'balik', 'jika', ...) starts a regex literal", () => {
+  assertEqual(parse(tokenize('isi p = /abc/')).body[0].value.type, 'RegexLiteral');
+  assertEqual(parse(tokenize('cetak(/abc/)')).body[0].expr.args[0].type, 'RegexLiteral');
+  assertEqual(parse(tokenize('fungsi f(): logika { balik /abc/.test("x") }')).body[0].body.body[0].value.type, 'CallExpr');
+});
+
+run('codegen: a regex literal compiles to a real JS regex verbatim', () => {
+  const js = compile('isi p = /^[0-9]+$/i');
+  assert(js.includes('/^[0-9]+$/i'), js);
+});
+
+run('typechecker: a regex literal type-checks as an unknown-typed value (methods resolve loosely)', () => {
+  tc('isi p = /abc/\ncetak(p.test("abc"))');
+});
+
+run('formatter: a regex literal round-trips verbatim', () => {
+  const src = 'isi p = /[0-9]+\\d/i\ncetak(p.test("x"))';
+  const once = format(src);
+  assert(once.includes('/[0-9]+\\d/i'), once);
+  assertEqual(once, format(once));
+});
+
+run("executes: a regex literal works end-to-end (.test/.replace) and division still works around it", () => {
+  const out = exec('isi p = /[0-9]+/\ncetak(p.test("abc123"))\ncetak("halo dunia".replace(/dunia/, "Gatra"))\nisi n = 10\ncetak(n / 2)');
+  assertEqual(out[0], 'true');
+  assertEqual(out[1], 'halo Gatra');
+  assertEqual(out[2], '5');
 });
 
 // ── Summary ───────────────────────────────────────────────────────────────────

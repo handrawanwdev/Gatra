@@ -10,8 +10,20 @@
 // (bukan lewat namespace). Compiler memvalidasi visibility saat kompilasi.
 
 impor { Tambah } dari "./26_visibility_modul.gatra"
+impor os dari "os"
 
 cetak(Tambah(10, 20))
+cetak(os.Platform())
+
+// Aturan yang sama berlaku ke API bawaan Node.js: 'os' asli pakai
+// camelCase/lowercase ('os.platform()'), tapi Gatra memaksa akses lewat
+// bentuk PascalCase-nya — mapping ke nama asli terjadi otomatis di compiler,
+// API Node.js sendiri tidak diubah sama sekali.
+//
+//   os.platform() — GALAT KOMPILASI kalau dipanggil langsung begini:
+//
+//   GALAT AKSES: `platform` bukan anggota public dari modul `os`.
+//   Gunakan `os.Platform()`.
 
 // Baris berikut GAGAL dikompilasi kalau di-uncomment, karena 'validasi'
 // huruf awalnya kecil (internal) di 26_visibility_modul.gatra:

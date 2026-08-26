@@ -45,6 +45,19 @@ function makePackageErrors(grammar) {
       return new PackageError('GALAT AKSES', msg, line, col);
     },
 
+    // Go-style visibility extended to every external module — Node builtins
+    // and npm packages alike (see external-interop.js): 'realMember' is a
+    // real lowercase/camelCase member (e.g. 'platform' on 'os', 'map' on
+    // 'lodash') accessed directly instead of through its PascalCase form.
+    externalMemberNotPublic(realMember, moduleLocalName, line, col) {
+      const { toPublicName } = require('../module/external-interop');
+      const suggested = toPublicName(realMember);
+      const msg = isID
+        ? `\`${realMember}\` bukan anggota public dari modul \`${moduleLocalName}\`.\nGunakan \`${moduleLocalName}.${suggested}()\`.`
+        : `\`${realMember}\` is not a public member of module \`${moduleLocalName}\`.\nUse \`${moduleLocalName}.${suggested}()\`.`;
+      return new PackageError('GALAT AKSES', msg, line, col);
+    },
+
     identifierNotFound(identName, source, line, col) {
       const msg = isID
         ? `'${identName}' tidak ditemukan di modul '${source}'`

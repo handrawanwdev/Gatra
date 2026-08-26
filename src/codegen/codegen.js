@@ -4,6 +4,7 @@ const path = require('path');
 const { NodeType: N } = require('../ast/nodes');
 const { isPublicName } = require('../module/visibility');
 const { resolveLocalPath, getModuleExports } = require('../module/resolver');
+const { isBuiltinModule } = require('../module/external-interop');
 
 // fungsi paralel — runtime scheduler for Automatic_Concurrency.md's Phase 0
 // (bounded worker pool + adaptive cost-based dispatch). Same "real, testable
@@ -42,6 +43,81 @@ function usesHasil(node) {
   }
   if (node.type === N.MATCH_RESULT_STMT) return true;
   return Object.keys(node).some(k => k !== 'type' && usesHasil(node[k]));
+}
+
+// Go-style visibility (PascalCase-public) extended to every non-local module
+// — Node builtins get it for free (their real member list is exhaustive, so
+// the typechecker bakes the real name straight into each MEMBER_EXPR — see
+// genMemberExpr()'s '_realMember'), but a namespace-style import of an npm
+// package needs a runtime proxy: static analysis of an arbitrary package's
+// source (external-interop.js) is only ever a best-effort hint, never
+// trusted enough to rewrite the call at compile time.
+const PASCAL_PROXY_PRELUDE = `function __gatra_pascal_proxy__(mod, moduleLabel) {
+  // A CJS package's real 'module.exports' object always lands at
+  // 'mod.default' under Node's ESM/CJS interop, unconditionally — but only
+  // properties cjs-module-lexer can statically see get synthesized directly
+  // onto 'mod' itself (a dynamically-assigned export, e.g. built in a loop,
+  // won't be). Checking both finds a real member either way; a pure-ESM
+  // package (no 'default' at all, or one that isn't itself an object) just
+  // resolves everything straight off 'mod'.
+  function cari(nama) {
+    if (mod && typeof mod === 'object' && nama in mod) return { ada: true, sumber: mod };
+    const isi = mod && mod.default;
+    if (isi && typeof isi === 'object' && nama in isi) return { ada: true, sumber: isi };
+    return { ada: false, sumber: null };
+  }
+  return new Proxy(mod, {
+    get(target, prop, receiver) {
+      if (typeof prop !== 'string') return Reflect.get(target, prop, receiver);
+      if (!/^[A-Z]/.test(prop)) {
+        if (cari(prop).ada) {
+          const saran = prop.charAt(0).toUpperCase() + prop.slice(1);
+          throw new Error('\`' + prop + '\` bukan anggota public dari modul \`' + moduleLabel + '\`.\\nGunakan \`' + moduleLabel + '.' + saran + '()\`.');
+        }
+        return Reflect.get(target, prop, receiver);
+      }
+      let hasil = cari(prop);
+      let nama  = prop;
+      if (!hasil.ada) {
+        nama  = prop.charAt(0).toLowerCase() + prop.slice(1);
+        hasil = cari(nama);
+      }
+      if (!hasil.ada) throw new Error('\`' + prop + '\` tidak ditemukan di modul \`' + moduleLabel + '\`');
+      const nilai = hasil.sumber[nama];
+      return typeof nilai === 'function' ? nilai.bind(hasil.sumber) : nilai;
+    }
+  });
+}`;
+
+// Same Go-style visibility, for 'impor { Nama } dari "modul-eksternal"' —
+// resolved once at binding time rather than a static destructure/aliased
+// import, for the same "best-effort hint, not a trusted rewrite" reason.
+const RESOLVE_NAMED_PRELUDE = `function __gatra_resolve_named__(mod, nama, moduleLabel) {
+  // Same 'mod' vs 'mod.default' story as __gatra_pascal_proxy__ above — see
+  // its comment.
+  function cari(n) {
+    if (mod && typeof mod === 'object' && n in mod) return mod;
+    const isi = mod && mod.default;
+    if (isi && typeof isi === 'object' && n in isi) return isi;
+    return null;
+  }
+  let sumber = cari(nama);
+  let asli   = nama;
+  if (!sumber) {
+    asli   = nama.charAt(0).toLowerCase() + nama.slice(1);
+    sumber = cari(asli);
+  }
+  if (!sumber) throw new Error('\`' + nama + '\` tidak ditemukan di modul \`' + moduleLabel + '\`');
+  return sumber[asli];
+}`;
+
+function usesPascalProxy(ast) {
+  return ast.body.some(s => s.type === N.PACKAGE_IMPORT && !s.names &&
+    !s.source.startsWith('.') && !isBuiltinModule(s.source));
+}
+
+function usesResolveNamed(ast) {
+  return ast.body.some(s => s.type === N.PACKAGE_IMPORT && s.names && !s.source.startsWith('.'));
 }
 
 // ke_teks/ke_angka/ke_bilangan/ke_pecahan/ke_byte/ke_logika — konversi tipe
@@ -351,6 +427,7 @@ class CodeGenerator {
     this.matchCounter  = 0;
     this.measureCounter = 0;
     this.withCounter   = 0;
+    this.extImportCounter = 0; // unique holder var per external named import (genPackageImport)
     this.withStack     = []; // active 'dengan'/'ubah' IIFE param names — innermost last
     this.includeTests  = !!opts.includeTests; // 'gatra uji' compiles with tests active
     this.structMethods = new Map(); // struct name → [receiver FnDecl, ...], collected up front by genProgram
@@ -408,6 +485,7 @@ class CodeGenerator {
       case N.NUMBER_LITERAL: return String(node.value);
       case N.STRING_LITERAL: return JSON.stringify(node.value);
       case N.BOOL_LITERAL:   return String(node.value);
+      case N.REGEX_LITERAL:  return `/${node.pattern}/${node.flags}`;
       default:
         throw new Error(`CodeGen: unknown node type '${node.type}'`);
     }
@@ -480,6 +558,8 @@ class CodeGenerator {
 
     if (usesTimeout(node)) lines.push(BATAS_PRELUDE);
     if (usesHasil(node)) lines.push(HASIL_PRELUDE);
+    if (usesPascalProxy(node)) lines.push(PASCAL_PROXY_PRELUDE);
+    if (usesResolveNamed(node)) lines.push(RESOLVE_NAMED_PRELUDE);
     if (usesKonversi(node)) lines.push(KONVERSI_PRELUDE);
     if (usesDecorators(node)) lines.push(DECORATE_PRELUDE);
     if (usesTipeData(node)) lines.push(TIPE_DATA_PRELUDE);
@@ -579,18 +659,47 @@ const __gatra_scheduler__ = require(${JSON.stringify(SCHEDULER_RUNTIME_PATH)});`
     // extension). require() carries the exact same runtime semantics here
     // (same require() the worker guard itself already uses) with none of
     // that module-system baggage.
+    const isExternal = !node.source.startsWith('.');
+    const isBuiltin  = isExternal && isBuiltinModule(node.source);
+    const src        = JSON.stringify(node.source);
+
     if (this.parallelFns.size > 0) {
       if (node.names) {
         const names = this.filterRuntimeImportNames(node);
-        return names.length ? `const { ${names.join(', ')} } = require(${JSON.stringify(node.source)});` : '';
+        if (!names.length) return '';
+        if (!isExternal) return `const { ${names.join(', ')} } = require(${src});`;
+        const holder = `__gatra_extmod_${this.extImportCounter++}__`;
+        return `const ${holder} = require(${src});\n` + this.genResolvedNamedImports(holder, names, node.source);
       }
-      return `const ${node.localName} = require(${JSON.stringify(node.source)});`;
+      const raw = `require(${src})`;
+      if (isExternal && !isBuiltin) {
+        return `const ${node.localName} = __gatra_pascal_proxy__(${raw}, ${src});`;
+      }
+      return `const ${node.localName} = ${raw};`;
     }
     if (node.names) {
       const names = this.filterRuntimeImportNames(node);
-      return names.length ? `import { ${names.join(', ')} } from ${JSON.stringify(node.source)};` : '';
+      if (!names.length) return '';
+      if (!isExternal) return `import { ${names.join(', ')} } from ${src};`;
+      const holder = `__gatra_extmod_${this.extImportCounter++}__`;
+      return `import * as ${holder} from ${src};\n` + this.genResolvedNamedImports(holder, names, node.source);
     }
-    return `import * as ${node.localName} from ${JSON.stringify(node.source)};`;
+    if (isExternal && !isBuiltin) {
+      const holder = `__gatra_extmod_${this.extImportCounter++}__`;
+      return `import * as ${holder} from ${src};\nconst ${node.localName} = __gatra_pascal_proxy__(${holder}, ${src});`;
+    }
+    return `import * as ${node.localName} from ${src};`;
+  }
+
+  // 'impor { Nama1, Nama2 } dari "modul-eksternal"' — every requested name
+  // resolved through __gatra_resolve_named__ (see its prelude comment) so
+  // the real PascalCase-vs-lowercase member name is settled at runtime,
+  // never guessed from a best-effort static scan.
+  genResolvedNamedImports(modExpr, names, source) {
+    const src = JSON.stringify(source);
+    return names
+      .map(n => `const ${n} = __gatra_resolve_named__(${modExpr}, ${JSON.stringify(n)}, ${src});`)
+      .join('\n');
   }
 
   genTopStmt(node) {
@@ -972,7 +1081,12 @@ const __gatra_scheduler__ = require(${JSON.stringify(SCHEDULER_RUNTIME_PATH)});`
     // sintaks JS keluaran, bukan niat penulis sumber.
     const objSrc = this.generate(node.object);
     const needsParens = node.object.type === N.NUMBER_LITERAL;
-    return `${needsParens ? `(${objSrc})` : objSrc}${op}${node.member}`;
+    // '_realMember' is set by the typechecker when this is a PascalCase
+    // access on a Node builtin mapped onto a real lowercase/camelCase member
+    // (e.g. 'os.Platform' -> 'os.platform') — emit a call to the real,
+    // untouched Node API instead of the Gatra-facing PascalCase spelling.
+    const member = node._realMember || node.member;
+    return `${needsParens ? `(${objSrc})` : objSrc}${op}${member}`;
   }
 
   genIndexExpr(node) {

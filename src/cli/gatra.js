@@ -17,7 +17,7 @@ const { lint } = require("../linter/linter");
 const { format } = require("../formatter/formatter");
 const { loadConfig, stringifyToml } = require("./config");
 const { buildGraph, findCycles, renderText: renderGraphText, renderJson: renderGraphJson, renderMermaid: renderGraphMermaid } = require("./graph");
-const { analyzeFile } = require("./explain");
+const { analyzeFile, analyzeFileDependencies } = require("./explain");
 
 const GATRA_VERSION = "0.1.0";
 
@@ -50,6 +50,15 @@ function compile(source, opts) {
 // Rewrite local .gatra import paths → .js in generated JS output
 function rewriteMgImports(js) {
   return js.replace(/from ("\.\.?\/[^"]+)\.gatra"/g, 'from $1.js"');
+}
+
+// Same as above but → .mjs — used only for runEsm()'s temp-run files, so
+// Node knows they're ES modules from the extension alone (unambiguous,
+// no per-file syntax sniffing) instead of guessing off a missing
+// "type": "module" in the nearest package.json and printing
+// MODULE_TYPELESS_PACKAGE_JSON + paying the reparse-as-ESM overhead.
+function rewriteMgImportsToMjs(js) {
+  return js.replace(/from ("\.\.?\/[^"]+)\.gatra"/g, 'from $1.mjs"');
 }
 
 function formatError(err, source, filePath) {
@@ -139,13 +148,13 @@ function runEsm(sourceFile, js, _sourceCode) {
         console.error(formatError(err, src, absPath));
         throw EXIT_SILENTLY;
       }
-      depJs = rewriteMgImports(depJs);
+      depJs = rewriteMgImportsToMjs(depJs);
 
       for (const m of src.matchAll(LOCAL_MG_SOURCE_RE)) {
         compileLocalDep(path.resolve(path.dirname(absPath), m[1]));
       }
 
-      const outPath = path.join(tmpDir, path.relative(sourceDir, absPath).replace(/\.gatra$/, ".js"));
+      const outPath = path.join(tmpDir, path.relative(sourceDir, absPath).replace(/\.gatra$/, ".mjs"));
       fs.mkdirSync(path.dirname(outPath), { recursive: true });
       fs.writeFileSync(outPath, depJs, "utf8");
     }
@@ -154,8 +163,8 @@ function runEsm(sourceFile, js, _sourceCode) {
       compileLocalDep(path.resolve(sourceDir, match[1].slice(1, -1)));
     }
 
-    const mainMjs = path.join(tmpDir, "main.js");
-    fs.writeFileSync(mainMjs, rewriteMgImports(js), "utf8");
+    const mainMjs = path.join(tmpDir, "main.mjs");
+    fs.writeFileSync(mainMjs, rewriteMgImportsToMjs(js), "utf8");
 
     const result = spawnSync(process.execPath, [mainMjs], { stdio: "inherit" });
     exitCode = result.status ?? 1;
@@ -830,6 +839,31 @@ function cmdExplain(filePath, fnFilter) {
     console.log(`  Runtime:   Node.js`);
     console.log(`  Strategi:  ${a.strategy}`);
   });
+
+  let scopes;
+  try {
+    scopes = analyzeFileDependencies(source);
+  } catch (err) {
+    return; // same source already typechecked fine above to get here; skip silently on any analysis edge case
+  }
+  if (scopes.length === 0) return;
+
+  console.log("\n── Dependency Graph (panggilan 'fungsi paralel') ──────────────\n");
+  console.log("Baris tanpa panah gak punya dependensi ke baris lain di scope yang sama — aman dijalankan konkuren.\nBaris dengan '<-' HARUS nunggu baris sumbernya kelar (data dependency), gak boleh dianggap independen.\n");
+  for (const g of scopes) {
+    console.log(`Scope: ${g.scope || '(top-level)'}\n`);
+    for (const c of g.calls) {
+      const incoming = g.edges.filter(e => e.to === c.id);
+      const label = c.writes ? `${c.writes} = ${c.callee}(...)` : `${c.callee}(...)`;
+      if (incoming.length === 0) {
+        console.log(`  [${c.id}] ${label}  (baris ${c.line}) — independen`);
+      } else {
+        const from = incoming.map(e => `[${e.from}] lewat '${e.via}' (${e.reason === 'raw' ? 'hasil dipakai' : 'akses bareng'})`).join(', ');
+        console.log(`  [${c.id}] ${label}  (baris ${c.line}) <- ${from}`);
+      }
+    }
+    console.log("");
+  }
 }
 
 // ── Bench (compiler + runtime performance) ───────────────────────────────────

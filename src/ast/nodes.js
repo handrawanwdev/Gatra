@@ -26,6 +26,7 @@ const NodeType = {
   FUNC_EXPR:      'FuncExpr',     // anonymous function expression
   TRY_STMT:       'TryStmt',      // coba/tangkap/akhirnya
   NULL_LITERAL:   'NullLiteral',  // kosong
+  REGEX_LITERAL:  'RegexLiteral', // /pola/flag
   BREAK_STMT:     'BreakStmt',    // berhenti
   CONTINUE_STMT:  'ContinueStmt', // lanjut
   TYPE_ALIAS_DECL:'TypeAliasDecl',// tipe

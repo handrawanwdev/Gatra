@@ -328,9 +328,12 @@ class Parser {
       if (this.check(T.ELLIPSIS)) {
         this.advance();
         const name = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama parameter setelah `...`").value;
-        params.push({ name, type: 'unknown[]', default: null, rest: true, decorators: paramDecorators });
+        params.push({ name, type: 'unknown[]', default: null, rest: true, decorators: paramDecorators, mutable: false });
         break;
       }
+      // 'ubah nama: tipe' — parameter boleh direassign di dalam body (lihat 'isi ubah' di varDecl()); tanpa 'ubah', parameter immutable seperti 'isi' biasa.
+      let mutable = false;
+      if (this.check(T.KEYWORD, 'mut')) { this.advance(); mutable = true; }
       const name = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama parameter').value;
       this.consume(T.COLON, undefined, "Diharapkan `:` setelah nama parameter — tiap parameter butuh tipe, contoh: `nama: teks`");
       const paramType = this.consumeType('Diharapkan tipe parameter setelah `:`');
@@ -338,7 +341,7 @@ class Parser {
       if (this.matchToken(T.EQUALS)) {
         defaultVal = this.expression();
       }
-      params.push({ name, type: paramType, default: defaultVal, decorators: paramDecorators });
+      params.push({ name, type: paramType, default: defaultVal, decorators: paramDecorators, mutable });
     } while (this.matchToken(T.COMMA));
 
     return params;
@@ -354,9 +357,11 @@ class Parser {
       if (this.check(T.ELLIPSIS)) {
         this.advance();
         const name = this.consume(T.IDENTIFIER, undefined, "Diharapkan nama parameter setelah `...`").value;
-        params.push({ name, type: 'unknown[]', default: null, rest: true });
+        params.push({ name, type: 'unknown[]', default: null, rest: true, mutable: false });
         break;
       }
+      let mutable = false;
+      if (this.check(T.KEYWORD, 'mut')) { this.advance(); mutable = true; }
       const name = this.consume(T.IDENTIFIER, undefined, 'Diharapkan nama parameter').value;
       let paramType = 'unknown';
       if (this.matchToken(T.COLON)) {
@@ -366,7 +371,7 @@ class Parser {
       if (this.matchToken(T.EQUALS)) {
         defaultVal = this.expression();
       }
-      params.push({ name, type: paramType, default: defaultVal });
+      params.push({ name, type: paramType, default: defaultVal, mutable });
     } while (this.matchToken(T.COMMA));
 
     return params;
@@ -626,6 +631,20 @@ class Parser {
     const source = this.unary();
     this.allowStructInit = prevAllow;
 
+    // Kesalahan umum: 'ubah nama = nilai' ditulis buat reassignment, padahal
+    // 'ubah' di posisi awal statement selalu jadi objectTransformExpr (spread
+    // ke objek baru) dan butuh '{ ... }' setelah source-nya — bukan '='.
+    // Reassignment biasa cukup 'nama = nilai' tanpa 'ubah' sama sekali
+    // ('ubah' cuma dipakai sekali, pas deklarasi 'isi ubah nama = ...').
+    if (spread && this.check(T.EQUALS)) {
+      const eq = this.peek();
+      throw new ParseError(
+        "'ubah' bukan buat menandai reassignment — langsung tulis 'nama = nilai'",
+        eq.line, eq.col,
+        "'ubah' cuma dipakai sekali, pas deklarasi ('isi ubah nama = ...'), buat nandain variabel itu boleh diubah nanti. Buat ubah nilainya belakangan, tulis langsung 'nama = nilai' tanpa 'ubah' di depannya."
+      );
+    }
+
     this.consume(T.LBRACE, undefined, `Diharapkan '{' setelah '${spread ? 'ubah' : 'dengan'}'`);
 
     const fields = [];
@@ -872,6 +891,47 @@ class Parser {
       return { type: N.UNARY_EXPR, op: '-', operand, line: tok.line, col: tok.col };
     }
 
+    // Prefix optional chain: '?expr.a.b.c' — sugar for 'expr?.a?.b?.c'. Every
+    // '.'/'?.' in the chain becomes optional, so the whole access short-
+    // circuits to 'kosong' at the first missing link without repeating '?.'
+    // at each level. Only meaningful with at least one '.'/'?.'/'['/'(' right
+    // after the base — a bare '?nama' with nothing chained is rejected.
+    if (this.check(T.QUESTION)) {
+      const qtok = this.advance();
+      let expr = this.primary();
+      let chained = false;
+      while (true) {
+        if (this.check(T.DOT) || this.check(T.QDOT)) {
+          this.advance();
+          const member = this.consumeMemberName("Diharapkan nama field/method setelah '.'");
+          expr = { type: N.MEMBER_EXPR, object: expr, member, optional: true, line: qtok.line, col: qtok.col };
+          chained = true;
+        } else if (this.check(T.LBRACKET)) {
+          const tok   = this.advance();
+          const index = this.expression();
+          this.consume(T.RBRACKET, undefined, "Diharapkan `]` setelah ekspresi indeks, contoh: `larik[0]`");
+          expr = { type: N.INDEX_EXPR, object: expr, index, line: tok.line, col: tok.col };
+          chained = true;
+        } else if (this.check(T.LPAREN)) {
+          const tok  = this.advance();
+          const args = this.argList();
+          this.consume(T.RPAREN, undefined, "Diharapkan `)`");
+          expr = { type: N.CALL_EXPR, callee: expr, args, line: tok.line, col: tok.col };
+          chained = true;
+        } else {
+          break;
+        }
+      }
+      if (!chained) {
+        throw new ParseError(
+          "'?' di awal ekspresi harus diikuti akses properti, contoh: '?nama.field'",
+          qtok.line, qtok.col,
+          "Kalau maksudnya operator ternary ('kondisi ? a : b'), taruh '?' setelah kondisinya, bukan di awal ekspresi."
+        );
+      }
+      return expr;
+    }
+
     return this.callExpr();
   }
 
@@ -977,6 +1037,12 @@ class Parser {
     if (tok.type === T.NUMBER) {
       this.advance();
       return { type: N.NUMBER_LITERAL, value: tok.value, line: tok.line, col: tok.col };
+    }
+
+    // Regex literal: /pola/flag
+    if (tok.type === T.REGEX) {
+      this.advance();
+      return { type: N.REGEX_LITERAL, pattern: tok.value.pattern, flags: tok.value.flags, line: tok.line, col: tok.col };
     }
 
     if (tok.type === T.STRING) {

@@ -9,7 +9,7 @@ fungsi asinkron ambilCepat(): teks {
 }
 
 fungsi asinkron ambilLambat(): teks {
-  tunggu tempo.setTimeout(3000)
+  tunggu tempo.SetTimeout(3000)
   balik "akhirnya selesai (3 detik)"
 }
 

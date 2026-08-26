@@ -6,6 +6,7 @@ const TokenType = {
   STRING:     'STRING',
   BOOL:       'BOOL',
   FSTRING:    'FSTRING',    // f"..." interpolated string
+  REGEX:      'REGEX',      // /pattern/flags
 
   // Identifiers / keywords / types
   IDENTIFIER: 'IDENTIFIER',

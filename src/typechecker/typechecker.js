@@ -4,6 +4,8 @@ const { NodeType: N } = require('../ast/nodes');
 const { SymbolTable }  = require('./symbol-table');
 const { makeErrors }   = require('./type-errors');
 const { resolveLocalPath, getModuleExports } = require('../module/resolver');
+const { isPublicName } = require('../module/visibility');
+const { isBuiltinModule, getExternalMembers, classifyExternalAccess } = require('../module/external-interop');
 const fs = require('fs');
 
 // Tipe numerik: 'number' (angka, generik) mencakup 'int' (bilangan), 'float'
@@ -192,8 +194,14 @@ class TypeChecker {
   // branch that didn't run; conservative on purpose (a false "already
   // moved" beats a missed real one), and 'tanpa_periksa(...)' is the
   // explicit way out when the programmer is certain that's fine here.
-  // Deliberately NOT general aliasing/borrow/lifetime analysis — just this
-  // one concrete, checkable rule.
+  // General points-to/interprocedural aliasing is undecidable to do exactly
+  // — not attempted here. What IS tracked: direct one-hop aliases created by
+  // 'isi b = a' (or 'b = a') — a bare-identifier copy with no computation in
+  // between — resolved through 'resolveAlias' below so 'b' and 'a' share the
+  // same moved-tracking identity from that point on. This closes the exact
+  // gap the un-aliased version of this check left open: passing 'data' to a
+  // paralel call, then reading it again through a same-named copy made just
+  // before the call, used to slip past 'usedAfterMove' silently.
   checkMoveSafety(ast) {
     const parallelFns = new Set();
     for (const s of ast.body) {
@@ -201,14 +209,23 @@ class TypeChecker {
     }
     if (parallelFns.size === 0) return;
 
+    const resolveAlias = (aliases, name) => {
+      const seen = new Set();
+      while (aliases.has(name) && !seen.has(name)) {
+        seen.add(name);
+        name = aliases.get(name);
+      }
+      return name;
+    };
+
     // 'unsafe' is true for anything nested inside a tanpa_periksa(...)
     // wrapper — suppresses the "already moved" read-check (that's the whole
     // point of the escape hatch) while still tracking any *new* moves found
     // within it normally, so e.g. tanpa_periksa(x) followed by a real
     // (non-wrapped) proses(x) two lines later still moves x for real.
-    const scan = (node, moved, unsafe) => {
+    const scan = (node, moved, aliases, unsafe) => {
       if (!node || typeof node !== 'object') return;
-      if (Array.isArray(node)) { for (const n of node) scan(n, moved, unsafe); return; }
+      if (Array.isArray(node)) { for (const n of node) scan(n, moved, aliases, unsafe); return; }
 
       // Function bodies always get their own independent scan (see the loop
       // below) — never inherit whatever 'moved' set the caller is tracking.
@@ -216,16 +233,17 @@ class TypeChecker {
 
       if (node.type === N.CALL_EXPR && typeof node.callee === 'object' && node.callee.type === N.IDENTIFIER) {
         if (node.callee.name === 'tanpa_periksa') {
-          for (const a of node.args) scan(a, moved, true);
+          for (const a of node.args) scan(a, moved, aliases, true);
           return;
         }
         if (parallelFns.has(node.callee.name)) {
           for (const arg of node.args) {
             if (arg.type === N.IDENTIFIER) {
-              if (!unsafe && moved.has(arg.name)) throw this.err.usedAfterMove(arg.name, arg.line, arg.col);
-              moved.set(arg.name, { line: arg.line, col: arg.col });
+              const real = resolveAlias(aliases, arg.name);
+              if (!unsafe && moved.has(real)) throw this.err.usedAfterMove(arg.name, arg.line, arg.col);
+              moved.set(real, { line: arg.line, col: arg.col });
             } else {
-              scan(arg, moved, unsafe);
+              scan(arg, moved, aliases, unsafe);
             }
           }
           return;
@@ -233,32 +251,39 @@ class TypeChecker {
       }
 
       if (node.type === N.IDENTIFIER) {
-        if (!unsafe && moved.has(node.name)) throw this.err.usedAfterMove(node.name, node.line, node.col);
+        if (!unsafe && moved.has(resolveAlias(aliases, node.name))) throw this.err.usedAfterMove(node.name, node.line, node.col);
         return;
       }
 
       if (node.type === N.ASSIGN_EXPR) {
-        scan(node.value, moved, unsafe);
-        if (node.target.type === N.IDENTIFIER) moved.delete(node.target.name); // reassignment = fresh ownership
-        else scan(node.target, moved, unsafe);
+        scan(node.value, moved, aliases, unsafe);
+        if (node.target.type === N.IDENTIFIER) {
+          moved.delete(node.target.name); // reassignment = fresh ownership
+          if (node.value.type === N.IDENTIFIER) aliases.set(node.target.name, resolveAlias(aliases, node.value.name));
+          else aliases.delete(node.target.name);
+        } else {
+          scan(node.target, moved, aliases, unsafe);
+        }
         return;
       }
 
       if (node.type === N.VAR_DECL) {
-        if (node.value) scan(node.value, moved, unsafe);
+        if (node.value) scan(node.value, moved, aliases, unsafe);
         moved.delete(node.name); // fresh binding, even if it shadows an outer moved name
+        if (node.value && node.value.type === N.IDENTIFIER) aliases.set(node.name, resolveAlias(aliases, node.value.name));
+        else aliases.delete(node.name);
         return;
       }
 
       for (const k of Object.keys(node)) {
         if (k === 'type') continue;
-        scan(node[k], moved, unsafe);
+        scan(node[k], moved, aliases, unsafe);
       }
     };
 
-    scan(ast.body, new Map(), false); // top-level statements share one linear scope
+    scan(ast.body, new Map(), new Map(), false); // top-level statements share one linear scope
     for (const s of ast.body) {
-      if (s.type === N.FN_DECL && s.body) scan(s.body.body, new Map(), false);
+      if (s.type === N.FN_DECL && s.body) scan(s.body.body, new Map(), new Map(), false);
     }
   }
 
@@ -394,8 +419,20 @@ class TypeChecker {
           this.defineImportedName(name, entry, node);
         }
       } else {
-        // External package or no filePath context — untyped, same laxness as namespace imports
+        // External package (npm) or Node builtin — same PascalCase-public
+        // convention as namespace-style access (external-interop.js): a
+        // requested name matching a real lowercase/camelCase export used
+        // directly is rejected; anything else (including a whole npm
+        // package whose exports aren't statically knowable) stays lax at
+        // compile time and is resolved for real at runtime by codegen's
+        // __gatra_resolve_named__ — see genPackageImport().
+        const members = getExternalMembers(node.source, this.filePath);
         for (const name of node.names) {
+          const result = classifyExternalAccess(members, name);
+          if (result.violation) {
+            const { makePackageErrors } = require('../package/package-errors');
+            throw makePackageErrors(this.grammar).externalMemberNotPublic(name, node.source, node.line, node.col);
+          }
           this.symbols.define(name, { kind: 'var', type: 'unknown', mutable: true, line: node.line, col: node.col });
         }
       }
@@ -406,12 +443,18 @@ class TypeChecker {
       throw this.err.duplicateVar(node.localName, node.line, node.col);
     }
     // Register namespace as 'package' kind — member access returns 'unknown',
-    // except for a Go-style visibility check against internal (lowercase) members.
+    // except for a Go-style visibility check against internal (lowercase)
+    // members: local .gatra modules via resolvedPath, any external module
+    // (builtin or npm) via externalMembers/isBuiltin — see
+    // external-interop.js and inferMemberExpr() below.
     this.symbols.define(node.localName, {
       kind: 'package',
       packageName: node.localName,
       source: node.source,
       resolvedPath: localPath && fs.existsSync(localPath) ? localPath : null,
+      isExternal: !localPath,
+      isBuiltin: !localPath && isBuiltinModule(node.source),
+      externalMembers: localPath ? null : getExternalMembers(node.source, this.filePath),
       line: node.line,
       col:  node.col,
     });
@@ -540,7 +583,7 @@ class TypeChecker {
           this.checkNumericLiteralFits(p.type, p.default);
         }
         this.symbols.define(p.name, {
-          kind: 'var', type: p.type, mutable: false,
+          kind: 'var', type: p.type, mutable: p.mutable || false,
           line: node.line, col: node.col,
         });
       }
@@ -596,7 +639,7 @@ class TypeChecker {
         this.checkNumericLiteralFits(p.type, p.default);
       }
       this.symbols.define(p.name, {
-        kind: 'var', type: p.type, mutable: false,
+        kind: 'var', type: p.type, mutable: p.mutable || false,
         line: node.line, col: node.col,
       });
     }
@@ -756,6 +799,7 @@ class TypeChecker {
       case N.AWAIT_EXPR:     return this.inferAwaitExpr(node);
       case N.FUNC_EXPR:      return this.inferFuncExpr(node);
       case N.NULL_LITERAL:   return 'null';
+      case N.REGEX_LITERAL:  return 'unknown'; // compiles to a real JS RegExp — no dedicated Gatra type, methods/props resolve loosely like other interop values
       case N.OBJECT_LITERAL: return this.inferObjectLiteral(node);
       case N.OBJECT_TRANSFORM_EXPR: return this.inferObjectTransformExpr(node);
       case N.TEMPLATE_EXPR:  return this.inferTemplateExpr(node);
@@ -997,6 +1041,27 @@ class TypeChecker {
             const { makePackageErrors } = require('../package/package-errors');
             throw makePackageErrors(this.grammar).accessDenied(node.member, node.line, node.col);
           }
+        } else if (sym && sym.kind === 'package' && sym.isExternal) {
+          // Any external module (builtin or npm), PascalCase-public
+          // convention (external-interop.js). A real lowercase/camelCase
+          // member used directly is always rejected here, regardless of
+          // source — that part of the check is fully reliable even for npm
+          // (classifyExternalAccess only throws off a *confirmed* real
+          // member name).
+          const result = classifyExternalAccess(sym.externalMembers, node.member);
+          if (result.violation) {
+            const { makePackageErrors } = require('../package/package-errors');
+            throw makePackageErrors(this.grammar).externalMemberNotPublic(node.member, sym.packageName, node.line, node.col);
+          }
+          // A builtin's member list is exhaustive and 100% authoritative
+          // (it's the real, actually-require()'d module) — safe to bake the
+          // real name straight into the compiled call (genMemberExpr). An
+          // npm package's list is only ever a best-effort *hint* (regex over
+          // source text, may easily be incomplete) — never used to rewrite
+          // the call; codegen instead wraps the whole npm namespace in a
+          // runtime proxy (__gatra_pascal_proxy__) that resolves every
+          // access for real, so correctness never depends on this hint.
+          if (sym.isBuiltin && result.real) node._realMember = result.real;
         }
       }
       return 'unknown';
@@ -1041,7 +1106,7 @@ class TypeChecker {
     this.symbols.push();
     for (const p of node.params) {
       this.symbols.define(p.name, {
-        kind: 'var', type: p.type, mutable: false,
+        kind: 'var', type: p.type, mutable: p.mutable || false,
         line: node.line, col: node.col,
       });
     }

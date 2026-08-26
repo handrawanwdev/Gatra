@@ -30,3 +30,133 @@ coba {
 } akhirnya {
   cetak("akhirnya tetap jalan")
 }
+
+// ── Melempar galat asli ──────────────────────────────────────────────────
+// Gatra belum punya keyword 'lempar' (throw) sendiri — pakai escape hatch
+// 'javascript {}' (lihat 20_fondasi_javascript.gatra) buat 'throw new
+// Error(...)'. 'e' di 'tangkap (e)' adalah objek Error JS asli, jadi
+// e.message bisa langsung dibaca.
+fungsi validasiUmur(umur: angka): tiada {
+  jika (umur < 0) {
+    javascript {
+      throw new Error('Umur tidak boleh negatif: ' + umur);
+    }
+  }
+  cetak("umur valid")
+}
+
+coba {
+  validasiUmur(-5)
+} tangkap (e) {
+  cetak("galat validasi:")
+  cetak(e.message)
+}
+
+// Galat custom dengan properti tambahan — bukan cuma pesan, tapi juga kode
+// galat yang bisa dicek pemanggil buat nentuin penanganan lanjut
+fungsi ambilPengguna(id: angka): tiada {
+  jika (id <= 0) {
+    javascript {
+      const e = new Error('ID tidak valid');
+      e.kode = 'ID_INVALID';
+      throw e;
+    }
+  }
+  cetak("pengguna ditemukan")
+}
+
+coba {
+  ambilPengguna(0)
+} tangkap (e) {
+  cetak(e.message)
+  cetak(e.kode)
+}
+
+// ── Try/catch bersarang ──────────────────────────────────────────────────
+// Galat yang dilempar ulang ('lempar ulang') dari blok 'tangkap' dalam
+// ditangkap oleh 'coba' di luarnya
+coba {
+  coba {
+    javascript { throw new Error('galat asli dari dalam'); }
+  } tangkap (galatDalam) {
+    cetak("ditangkap di lapis dalam, dibungkus lalu dilempar ulang")
+    javascript { throw new Error('dibungkus: ' + galatDalam.message); }
+  }
+} tangkap (luar) {
+  cetak(luar.message)
+}
+
+// ── Gabung 'coba/tangkap' dengan hasil<T,E> ──────────────────────────────
+// Ubah exception jadi nilai balik biasa (berhasil/gagal), biar pemanggil
+// tidak perlu bungkus 'coba' lagi — lihat 23_hasil_pattern_matching.gatra
+// buat detail hasil<T,E>/cocok
+fungsi baginAman(a: angka, b: angka): hasil<angka, teks> {
+  coba {
+    jika (b == 0) {
+      javascript { throw new Error('pembagi tidak boleh nol'); }
+    }
+    balik berhasil(a / b)
+  } tangkap (e) {
+    balik gagal(e.message)
+  }
+}
+
+cocok baginAman(10, 2) {
+  berhasil(nilai) => cetak(nilai)
+  gagal(galat) => cetak("gagal: " + galat)
+}
+
+cocok baginAman(10, 0) {
+  berhasil(nilai) => cetak(nilai)
+  gagal(galat) => cetak("gagal: " + galat)
+}
+
+// ── Parsing data eksternal yang bisa gagal ────────────────────────────────
+// JSON.parse (JS asli, lewat escape hatch) melempar SyntaxError kalau
+// formatnya rusak — kasus umum saat baca respons API/file config
+coba {
+  isi ubah data: apa_saja = kosong
+  javascript {
+    data = JSON.parse('{ "nama": tidak_valid }');
+  }
+  cetak(data)
+} tangkap (e) {
+  cetak("gagal parse JSON:")
+  cetak(e.message)
+}
+
+// ── 'akhirnya' + 'balik' ──────────────────────────────────────────────────
+// 'akhirnya' tetap jalan walau blok 'coba' sudah 'balik' lebih dulu — cocok
+// buat pembersihan resource (tutup koneksi, file, dst). Lihat juga
+// 24_ukur_timing.gatra.
+fungsi prosesData(): teks {
+  coba {
+    balik "berhasil diproses"
+  } akhirnya {
+    cetak("pembersihan resource (akhirnya tetap jalan walau sudah 'balik')")
+  }
+}
+cetak(prosesData())
+
+// ── Menangkap galat dari operasi asinkron ────────────────────────────────
+// 'tunggu' di dalam 'coba' — penolakan Promise (atau throw di dalam fungsi
+// asinkron) ditangkap sama seperti galat sinkron biasa
+fungsi asinkron ambilDataAsinkron(gagalkan: logika): teks {
+  jika (gagalkan) {
+    javascript { throw new Error('koneksi ke server terputus'); }
+  }
+  balik "data diterima"
+}
+
+fungsi asinkron utamaPenangananGalat(): tiada {
+  coba {
+    isi hasil = tunggu ambilDataAsinkron(benar)
+    cetak(hasil)
+  } tangkap (e) {
+    cetak("galat asinkron:")
+    cetak(e.message)
+  } akhirnya {
+    cetak("percobaan koneksi selesai")
+  }
+}
+utamaPenangananGalat()

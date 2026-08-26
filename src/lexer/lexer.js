@@ -78,6 +78,43 @@ class Lexer {
     return value;
   }
 
+  // Assumes the opening '/' is already consumed. A '/' inside '[...]'
+  // doesn't need escaping in JS regex syntax either, so bracket depth is
+  // tracked the same way — otherwise e.g. /[/]/ would stop at the wrong '/'.
+  readRegex(line, col) {
+    let pattern = '';
+    let inClass = false;
+    while (true) {
+      if (this.pos >= this.source.length || this.peek() === '\n') {
+        throw new LexError("Unterminated regex literal — missing closing '/'", line, col);
+      }
+      const c = this.peek();
+      if (c === '\\') {
+        pattern += this.advance();
+        if (this.pos < this.source.length) pattern += this.advance();
+        continue;
+      }
+      if (c === '[') { inClass = true; pattern += this.advance(); continue; }
+      if (c === ']') { inClass = false; pattern += this.advance(); continue; }
+      if (c === '/' && !inClass) { this.advance(); break; }
+      pattern += this.advance();
+    }
+    let flags = '';
+    while (/[a-zA-Z]/.test(this.peek())) flags += this.advance();
+    return { pattern, flags };
+  }
+
+  // Classic regex-vs-division lexer ambiguity: '/' starts a regex literal
+  // unless the previous token could itself end an expression (a value or a
+  // ')'/']' closing one), in which case '/' has to be division instead —
+  // same heuristic real JS lexers use.
+  canPrecedeDivision() {
+    const tok = this.tokens[this.tokens.length - 1];
+    if (!tok) return false;
+    if ([T.IDENTIFIER, T.NUMBER, T.STRING, T.FSTRING, T.BOOL, T.RPAREN, T.RBRACKET, T.TYPE].includes(tok.type)) return true;
+    return tok.type === T.KEYWORD && tok.value === 'null';
+  }
+
   readFString(line, col) {
     let raw = '';
     let depth = 0;
@@ -257,7 +294,14 @@ class Lexer {
             ? this.emit(T.ARROW, '->', line, col)
             : this.emit(T.MINUS, '-',  line, col);
           break;
-        case '/': this.emit(T.SLASH,  '/',  line, col); break;
+        case '/':
+          if (this.canPrecedeDivision()) {
+            this.emit(T.SLASH, '/', line, col);
+          } else {
+            const { pattern, flags } = this.readRegex(line, col);
+            this.emit(T.REGEX, { pattern, flags }, line, col);
+          }
+          break;
         case '=':
           if (this.match('='))      this.emit(T.EQEQ,      '==', line, col);
           else if (this.match('>')) this.emit(T.FAT_ARROW,  '=>', line, col);

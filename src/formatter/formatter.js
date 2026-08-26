@@ -108,9 +108,10 @@ class Formatter {
     return params.map(p => {
       const deco = (p.decorators || []).map(d => this.decoratorSrc(d) + ' ').join('');
       if (p.rest) return `${deco}...${p.name}`;
+      const mut = p.mutable ? 'ubah ' : '';
       const def = p.default ? ` = ${this.expr(p.default)}` : '';
-      if (arrow && p.type === 'unknown') return `${deco}${p.name}${def}`;
-      return `${deco}${p.name}: ${typeToSource(p.type)}${def}`;
+      if (arrow && p.type === 'unknown') return `${deco}${mut}${p.name}${def}`;
+      return `${deco}${mut}${p.name}: ${typeToSource(p.type)}${def}`;
     }).join(', ');
   }
 
@@ -192,6 +193,7 @@ class Formatter {
       case N.STRING_LITERAL: return JSON.stringify(node.value);
       case N.BOOL_LITERAL:   return node.value ? 'benar' : 'salah';
       case N.NULL_LITERAL:   return 'kosong';
+      case N.REGEX_LITERAL:  return `/${node.pattern}/${node.flags}`;
       case N.BINARY_EXPR:    return `${this.expr(node.left)} ${node.op} ${this.expr(node.right)}`;
       case N.UNARY_EXPR:     return `${node.op}${this.expr(node.operand)}`;
       case N.ASSIGN_EXPR:    return `${this.expr(node.target)} = ${this.expr(node.value)}`;

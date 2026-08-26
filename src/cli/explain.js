@@ -11,6 +11,7 @@
 const { tokenize }    = require('../lexer/lexer');
 const { parse }       = require('../parser/parser');
 const { NodeType: N } = require('../ast/nodes');
+const { analyzeDependencies } = require('../typechecker/dependency-graph');
 
 function walk(node, visit) {
   if (!node || typeof node !== 'object') return;
@@ -81,4 +82,15 @@ function analyzeFile(source) {
   return fns.map((fn) => analyzeFunction(fn, importAliases));
 }
 
-module.exports = { analyzeFile };
+// Data-dependency graph among 'fungsi paralel' call sites — see
+// dependency-graph.js's own comment for exactly what this does and doesn't
+// prove. Each scope is either the top-level program body (scope: null) or a
+// single declared function's body (scope: <fnName>) — the same isolation
+// granularity checkMoveSafety uses, since a nested function never sees an
+// outer scope's variables/calls.
+function analyzeFileDependencies(source) {
+  const ast = parse(tokenize(source));
+  return analyzeDependencies(ast);
+}
+
+module.exports = { analyzeFile, analyzeFileDependencies };
